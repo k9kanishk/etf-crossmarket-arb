@@ -17,6 +17,13 @@
 #     ./data/IEMM.MI_daily.csv
 #     ./data/EURUSD_daily.csv
 #
+import os, sys
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_PATH = str(PROJECT_ROOT / "src")
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
+
 from __future__ import annotations
 import os, sys
 import io
