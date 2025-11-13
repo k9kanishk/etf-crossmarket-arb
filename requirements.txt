@@ -1,0 +1,7 @@
+pandas
+numpy
+statsmodels
+pandas_market_calendars
+matplotlib
+pytz
+scipy
