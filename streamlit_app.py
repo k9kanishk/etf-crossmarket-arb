@@ -1,17 +1,3 @@
-# streamlit_app.py
-
-import os
-import sys
-
-# ---- Make src/ importable so we can do `import arbitrage` ----
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SRC_PATH = os.path.join(CURRENT_DIR, "src")
-
-# IMPORTANT: use string, and insert at position 0
-if SRC_PATH not in sys.path:
-    sys.path.insert(0, SRC_PATH)
-
-# ---- now normal imports ----
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -21,7 +7,6 @@ from arbitrage.config import PARAMS as DEFAULT_PARAMS, PAIR_CONFIG, BASE_CCY
 from arbitrage.core import Explorer, PairAnalyzer, FXNormalizer, PairData, SignalEngine
 from arbitrage.data import DataLoader, DemoCSVLoader
 from arbitrage.backtest import Backtester, summarize_trades, kpis
-
 
 st.set_page_config(page_title="ETF Cross‑Market Arbitrage", layout="wide")
 st.title("Global ETF Correlation & Cross‑Market Arbitrage Explorer")
