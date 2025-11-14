@@ -25,6 +25,22 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(1, str(SRC_PATH))
 
+import sys
+import os
+import streamlit as st
+
+# ---------------------------------------------------------
+# CRITICAL: Add project root to Python's import path
+# ---------------------------------------------------------
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Verify the module exists (optional but helpful)
+if not os.path.exists(os.path.join(project_root, 'arbitrage', '__init__.py')):
+    st.error(f"❌ Missing arbitrage/__init__.py at {project_root}")
+    st.stop()
+
 # -------------------------------------------------------------------
 # Now we can safely import from arbitrage.*
 # -------------------------------------------------------------------
