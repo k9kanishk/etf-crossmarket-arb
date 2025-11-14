@@ -1,36 +1,21 @@
+# streamlit_app.py
 
-# Notes:
-# - Expects your core code in src/arbitrage/*.py (from previous phase).
-# - Reads CSVs from ./data by default OR you can upload files in the sidebar.
-# - CSV format: first column is date, includes a 'close' column.
-#
-#   Example filenames (if using defaults):
-#     ./data/SPY_daily.csv
-#     ./data/CSPX.L_daily.csv
-#     ./data/VWO_daily.csv
-#     ./data/IEMM.MI_daily.csv
-#     ./data/EURUSD_daily.csv
-#
+import os
+import sys
 
-import os, sys
-from pathlib import Path
-PROJECT_ROOT = Path(__file__).resolve().parent
-SRC_PATH = str(PROJECT_ROOT / "src")
+# ---- Make src/ importable so we can do `import arbitrage` ----
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_PATH = os.path.join(CURRENT_DIR, "src")
+
+# IMPORTANT: use string, and insert at position 0
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
 
-
-import os, sys
-import io
+# ---- now normal imports ----
 import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-
-# Make sure we can import from ./src
-SRC_PATH = os.path.join(os.path.dirname(__file__), "src")
-if SRC_PATH not in sys.path:
-    sys.path.append(SRC_PATH)
 
 from arbitrage.config import PARAMS as DEFAULT_PARAMS, PAIR_CONFIG, BASE_CCY
 from arbitrage.core import Explorer, PairAnalyzer, FXNormalizer, PairData, SignalEngine
