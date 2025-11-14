@@ -22,6 +22,7 @@ from arbitrage.core import Explorer, PairAnalyzer, FXNormalizer, PairData, Signa
 from arbitrage.data import DataLoader, DemoCSVLoader
 from arbitrage.backtest import Backtester, summarize_trades, kpis
 
+
 st.set_page_config(page_title="ETF Cross‑Market Arbitrage", layout="wide")
 st.title("Global ETF Correlation & Cross‑Market Arbitrage Explorer")
 st.caption("Normalize across FX, detect mispricings via z‑scores, and backtest mean‑reversion signals.")
