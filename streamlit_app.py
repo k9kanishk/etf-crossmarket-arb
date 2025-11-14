@@ -18,7 +18,6 @@
 #     ./data/EURUSD_daily.csv
 #
 
-from __future__ import annotations
 import os, sys
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
