@@ -1,0 +1,21 @@
+[project]
+name = "etf-crossmarket-arb"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+  "pandas",
+  "numpy",
+  "statsmodels",
+  "pandas_market_calendars",
+  "matplotlib",
+  "pytz",
+  "scipy",
+  "streamlit",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
