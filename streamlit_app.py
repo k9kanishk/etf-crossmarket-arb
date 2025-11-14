@@ -1,10 +1,4 @@
-# Streamlit UI for Global ETF Cross‑Market Arbitrage Explorer
-# -----------------------------------------------------------------------------
-# Usage:
-pip install -r requirements.txt
-pip install streamlit
-streamlit run streamlit_app.py
-#
+
 # Notes:
 # - Expects your core code in src/arbitrage/*.py (from previous phase).
 # - Reads CSVs from ./data by default OR you can upload files in the sidebar.
