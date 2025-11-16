@@ -11,10 +11,13 @@ dependencies = [
   "pytz",
   "scipy",
   "streamlit",
+  "requests",
+  "python-dotenv"
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["arbitrage*"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
