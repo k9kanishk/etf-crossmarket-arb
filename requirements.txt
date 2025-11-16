@@ -6,3 +6,5 @@ matplotlib
 pytz
 scipy
 streamlit
+requests
+python-dotenv
