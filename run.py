@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from arbitrage.config import PARAMS, PAIR_CONFIG
 from arbitrage.core import Explorer
 from arbitrage.data import DemoCSVLoader  # or Vendor loader later (TiingoLoader etc.)
