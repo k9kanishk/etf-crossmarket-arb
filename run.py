@@ -3,7 +3,7 @@ from arbitrage.config import PARAMS, PAIR_CONFIG
 from arbitrage.core import Explorer
 from arbitrage.data import DemoCSVLoader  # or Vendor loader later
 
-USE_VENDOR = True  # flip to True when you use real API data
+USE_VENDOR = False  # flip to True when you use real API data
 
 
 def main() -> None:
