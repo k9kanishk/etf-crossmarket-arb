@@ -37,7 +37,7 @@ class StreamlitLoader(DataLoader):
     when the user tweaks parameters.
     """
 
-    def __init__(self, root: str = "./data", uploads: Dict[str, Optional[bytes]] = None):
+    def __init__(self, root: str = "./data", uploads: Dict[str, Optional[io.BytesIO]] = None):
         self.root = root
         self.uploads = uploads or {}
 
@@ -66,19 +66,13 @@ class StreamlitLoader(DataLoader):
         return self._read_cached(f"fx::{pair}", raw, path)
 
 
-def build_fx_map(loader: DataLoader, pair_conf: Dict) -> Dict[str, pd.DataFrame]:
-    fx_needed: set[str] = set()
-    for leg in ("us", "eu"):
-        ccy = pair_conf[leg]["ccy"]
-        if ccy != BASE_CCY:
-            fx_needed.add(f"{ccy}{BASE_CCY}")
-            fx_needed.add(f"{BASE_CCY}{ccy}")
-
+def build_fx_map(loader: DataLoader) -> Dict[str, pd.DataFrame]:
     fx_map: Dict[str, pd.DataFrame] = {}
-    for k in fx_needed:
+    for k in {"EURUSD", "USDGBP", "GBPUSD", "EURGBP"}:
         try:
             fx_map[k] = loader.load_fx_daily(k)
         except Exception:
+            # optional – only complain later if conversion fails
             pass
     return fx_map
 
@@ -86,7 +80,7 @@ def build_fx_map(loader: DataLoader, pair_conf: Dict) -> Dict[str, pd.DataFrame]
 def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairData, pd.DataFrame, List]:
     """Load, FX-normalize, build ratio DF and generate signals for a pair."""
 
-    fx_map = build_fx_map(loader, pair_conf)
+    fx_map = build_fx_map(loader)
     fx_norm = FXNormalizer(BASE_CCY, fx_map)
 
     us_df = loader.load_etf_daily(pair_conf["us"]["ticker"])
@@ -283,24 +277,10 @@ st.subheader("Cross-pair z-score heatmap")
 st.caption("Latest mispricing snapshot across configured pairs (z of US/EU price ratio).")
 
 z_cols = []
-summary_rows = []
 for pc in PAIR_CONFIG:
     try:
-        _, z_df, sigs_df = run_pair(pc, loader, params)
-        bt_pair = Backtester(params)
-        equity_pair, trades_pair, mt_pair = bt_pair.run(z_df, sigs_df)
-        metrics_pair = kpis(trades_pair, params["position_usd"], equity_pair, mt_pair)
+        _, z_df, _ = run_pair(pc, loader, params)
         z_cols.append(z_df[["z"]].rename(columns={"z": pc["name"]}))
-        summary_rows.append({
-            "pair": pc["name"],
-            "trades": metrics_pair.get("trades", 0),
-            "hit_rate": metrics_pair.get("hit_rate", 0.0),
-            "avg_ret_bps": metrics_pair.get("avg_ret_bps", 0.0),
-            "sharpe_like": metrics_pair.get("sharpe_like", 0.0),
-            "equity_sharpe": metrics_pair.get("equity_sharpe", 0.0),
-            "avg_hold_days": metrics_pair.get("avg_hold_days", 0.0),
-            "latest_z": z_df["z"].iloc[-1] if not z_df.empty else np.nan,
-        })
     except Exception:
         continue
 
@@ -318,18 +298,5 @@ if z_cols:
     ax4.set_title("Z-score heatmap (time vs pair)")
     fig4.colorbar(cax, label="z")
     st.pyplot(fig4, clear_figure=True)
-
-    if summary_rows:
-        summary_df = pd.DataFrame(summary_rows).set_index("pair")
-        summary_df["hit_rate"] = summary_df["hit_rate"] * 100
-        st.subheader("Cross-pair summary")
-        st.dataframe(summary_df.style.format({
-            "hit_rate": "{:.1f}%",
-            "avg_ret_bps": "{:.2f}",
-            "sharpe_like": "{:.2f}",
-            "equity_sharpe": "{:.2f}",
-            "avg_hold_days": "{:.2f}",
-            "latest_z": "{:.2f}",
-        }))
 else:
     st.write("Unable to build heatmap – check that all CSVs exist in ./data.")
