@@ -56,15 +56,13 @@ class StreamlitLoader(DataLoader):
         return df[["close"]]
 
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
-        up = self.uploads.get(ticker)
+        raw = self.uploads.get(ticker)
         path = os.path.join(self.root, f"{ticker}_daily.csv")
-        raw = up.read() if up else None
         return self._read_cached(f"etf::{ticker}", raw, path)
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
-        up = self.uploads.get(pair)
+        raw = self.uploads.get(pair)
         path = os.path.join(self.root, f"{pair}_daily.csv")
-        raw = up.read() if up else None
         return self._read_cached(f"fx::{pair}", raw, path)
 
 
@@ -134,9 +132,23 @@ with st.sidebar:
 
     st.subheader("Upload (optional)")
     st.caption("Provide custom CSVs to override ./data files.")
-    up_us = st.file_uploader(f"{pair_conf['us']['ticker']} (ETF daily CSV)", type=["csv"], key="us")
-    up_eu = st.file_uploader(f"{pair_conf['eu']['ticker']} (ETF daily CSV)", type=["csv"], key="eu")
-    up_eurusd = st.file_uploader("EURUSD (FX daily CSV)", type=["csv"], key="eurusd")
+    key_us = f"us_{pair_conf['name']}"
+    key_eu = f"eu_{pair_conf['name']}"
+    up_us = st.file_uploader(f"{pair_conf['us']['ticker']} (ETF daily CSV)", type=["csv"], key=key_us)
+    up_eu = st.file_uploader(f"{pair_conf['eu']['ticker']} (ETF daily CSV)", type=["csv"], key=key_eu)
+
+    fx_uploads = []
+    for leg in ("us", "eu"):
+        ccy = pair_conf[leg]["ccy"]
+        if ccy != BASE_CCY:
+            fx_pair = f"{ccy}{BASE_CCY}"
+            key_fx = f"fx_{pair_conf['name']}_{fx_pair}"
+            fx_uploads.append(
+                (
+                    fx_pair,
+                    st.file_uploader(f"{fx_pair} (FX daily CSV)", type=["csv"], key=key_fx),
+                )
+            )
 
 params = dict(
     lookback=lookback,
@@ -153,11 +165,12 @@ params = dict(
 )
 
 uploads_map = {
-    pair_conf["us"]["ticker"]: up_us,
-    pair_conf["eu"]["ticker"]: up_eu,
+    pair_conf["us"]["ticker"]: up_us.getvalue() if up_us else None,
+    pair_conf["eu"]["ticker"]: up_eu.getvalue() if up_eu else None,
 }
-if up_eurusd is not None:
-    uploads_map["EURUSD"] = up_eurusd
+for fx_pair, fx_file in fx_uploads:
+    if fx_file is not None:
+        uploads_map[fx_pair] = fx_file.getvalue()
 
 loader = StreamlitLoader(root="./data", uploads=uploads_map)
 try:
@@ -167,9 +180,16 @@ except KeyError as e:
     st.stop()
 
 bt = Backtester(params)
-equity_df, trades = bt.run(ratio_df, sigs)
+equity_df, trades, market_time = bt.run(ratio_df, sigs)
 trade_df = summarize_trades(trades, params["position_usd"]) if trades else pd.DataFrame()
-metrics = kpis(trades, params["position_usd"]) if trades else {"trades": 0}
+metrics = kpis(trades, params["position_usd"], equity_df, market_time) if trades is not None else {"trades": 0}
+metrics.update({
+    "adf_pvalue": PairAnalyzer.adf_pvalue(np.log(ratio_df["ratio"]).dropna()),
+    "avg_roll_corr": float(ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()) if "roll_corr" in ratio_df else 0.0,
+    "corr_below_min_pct": float((ratio_df.get("roll_corr", pd.Series(dtype=float)) < min_corr).mean() * 100)
+    if "roll_corr" in ratio_df
+    else 0.0,
+})
 
 # ====================== PLOTS ======================
 
@@ -186,6 +206,12 @@ with left:
     ax.set_title(f"{pair.name} — ratio in {BASE_CCY}")
     ax.grid(True, alpha=0.3)
     st.pyplot(fig, clear_figure=True)
+    st.download_button(
+        "Download ratio CSV",
+        data=ratio_df.to_csv().encode(),
+        file_name=f"{pair.name}_ratio.csv",
+        mime="text/csv",
+    )
 
     st.subheader("Equity Curve (cum PnL)")
     if not equity_df.empty:
@@ -194,6 +220,12 @@ with left:
         ax2.set_title("Cumulative PnL (USD)")
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2, clear_figure=True)
+        st.download_button(
+            "Download equity CSV",
+            data=equity_df.to_csv().encode(),
+            file_name=f"{pair.name}_equity.csv",
+            mime="text/csv",
+        )
     else:
         st.info("No trades were generated with current parameters.")
 
@@ -205,7 +237,17 @@ with right:
     c2.metric("Hit Rate", f"{m.get('hit_rate', 0.0)*100:.1f}%")
     c1.metric("Avg Ret (bps)", f"{m.get('avg_ret_bps', 0.0):.2f}")
     c2.metric("Sharpe-like", f"{m.get('sharpe_like', 0.0):.2f}")
+    c1.metric("Avg hold (days)", f"{m.get('avg_hold_days', 0.0):.2f}")
+    c2.metric("Median hold", f"{m.get('median_hold_days', 0.0):.2f}")
+    st.metric("Equity Sharpe", f"{m.get('equity_sharpe', 0.0):.2f}")
     st.metric("Max Drawdown (USD)", f"{m.get('max_drawdown_usd', 0.0):,.0f}")
+    st.metric("Time in market", f"{m.get('time_in_market_pct', 0.0)*100:.1f}%")
+
+    st.divider()
+    st.subheader("Stationarity & Corr Filters")
+    st.metric("ADF p-value (log ratio)", f"{m.get('adf_pvalue', 0.0):.3f}")
+    st.metric("Avg rolling corr", f"{m.get('avg_roll_corr', 0.0):.2f}")
+    st.metric("% corr < min", f"{m.get('corr_below_min_pct', 0.0):.1f}%")
 
     st.divider()
     st.caption("Rolling correlation (returns)")
@@ -221,6 +263,12 @@ st.divider()
 st.subheader("Trade Log")
 if not trade_df.empty:
     st.dataframe(trade_df)
+    st.download_button(
+        "Download trades CSV",
+        data=trade_df.to_csv().encode(),
+        file_name=f"{pair.name}_trades.csv",
+        mime="text/csv",
+    )
 else:
     st.write("No trades yet.")
 

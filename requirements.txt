@@ -8,3 +8,4 @@ scipy
 streamlit
 requests
 python-dotenv
+pytest
