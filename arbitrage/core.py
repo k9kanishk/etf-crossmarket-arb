@@ -33,7 +33,10 @@ class FXNormalizer:
         if inv_key in self.fx:
             rate = self.fx[inv_key]["close"].reindex(px.index).ffill()
             return px / rate
-        raise KeyError(f"No FX series to convert {quote_ccy}->{self.base}")
+        raise KeyError(
+            f"No FX series to convert {quote_ccy}->{self.base}. "
+            f"Available pairs: {list(self.fx.keys())}"
+        )
 
 # ---------- pair analyzer ----------
 
@@ -126,9 +129,15 @@ class Explorer:
         us = self.loader.load_etf_daily(pair_conf["us"]["ticker"])
         eu = self.loader.load_etf_daily(pair_conf["eu"]["ticker"])
 
+        fx_needed: set[str] = set()
+        for leg in ("us", "eu"):
+            ccy = pair_conf[leg]["ccy"]
+            if ccy != BASE_CCY:
+                fx_needed.add(f"{ccy}{BASE_CCY}")
+                fx_needed.add(f"{BASE_CCY}{ccy}")
+
         fx_map: Dict[str, pd.DataFrame] = {}
-        # Attempt to load common crosses; silently skip if missing
-        for k in {"EURUSD", "USDGBP", "GBPUSD", "EURGBP"}:
+        for k in fx_needed:
             try:
                 fx_map[k] = self.loader.load_fx_daily(k)
             except Exception:
@@ -148,21 +157,28 @@ class Explorer:
         analyzer = PairAnalyzer(fx_norm, self.params["lookback"])
         ratio_df = analyzer.build_ratio_df(pair)
 
+        log_ratio = np.log(ratio_df["ratio"])
+        adf_pval = analyzer.adf_pvalue(log_ratio)
+
         if self.params.get("use_adf_filter", False):
-            pval = analyzer.adf_pvalue(ratio_df["ratio"].dropna())
-            if pval > 0.10:
-                return {"pair": pair.name, "skipped": True, "reason": f"ADF p={pval:.3f}"}
+            if adf_pval > 0.10:
+                return {"pair": pair.name, "skipped": True, "reason": f"ADF p={adf_pval:.3f}"}
 
         # 4) Signals + Backtest
         sig_engine = SignalEngine(self.params)
         sigs = sig_engine.generate(ratio_df)
 
         bt = Backtester(self.params)
-        equity, trades = bt.run(ratio_df, sigs)
+        equity, trades, market_time = bt.run(ratio_df, sigs)
 
         # 5) Analytics
         trade_df = summarize_trades(trades, self.params["position_usd"])
-        metrics = kpis(trades, self.params["position_usd"])
+        metrics = kpis(trades, self.params["position_usd"], equity, market_time)
+        metrics.update({
+            "adf_pvalue": float(adf_pval),
+            "avg_roll_corr": float(ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()) if "roll_corr" in ratio_df else 0.0,
+            "corr_below_min_pct": float((ratio_df.get("roll_corr", pd.Series(dtype=float)) < self.params["min_corr"]).mean() * 100) if "roll_corr" in ratio_df else 0.0,
+        })
 
         return {
             "pair": pair.name,

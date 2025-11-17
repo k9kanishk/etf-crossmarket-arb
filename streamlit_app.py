@@ -1,266 +1,43 @@
-# streamlit_app.py
-# Self-contained Streamlit UI for Global ETF Cross-Market Arbitrage Explorer
+"""
+Streamlit UI for Global ETF Cross-Market Arbitrage Explorer.
 
-import os
+This file reuses the reusable arbitrage core/backtest modules to keep the
+interactive dashboard in sync with the backtest/CLI pipeline.
+"""
+
 import io
-from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+import os
+from typing import Dict, List, Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-from statsmodels.tsa.stattools import adfuller
 
-# ====================== CONFIG ======================
+from arbitrage.backtest import Backtester, kpis, summarize_trades
+from arbitrage.config import BASE_CCY, PAIR_CONFIG, PARAMS
+from arbitrage.core import FXNormalizer, PairAnalyzer, PairData, SignalEngine
+from arbitrage.data import DataLoader
 
-BASE_CCY = "USD"
-
-PAIR_CONFIG = [
-    {
-        "name": "S&P500_US_vs_LSE",
-        "us": {"ticker": "SPY",     "ccy": "USD", "venue": "NYSE"},
-        "eu": {"ticker": "CSPX.L",  "ccy": "USD", "venue": "LSE"},
-        "fx": "EURUSD",
-    },
-    {
-        "name": "EM_US_vs_EU",
-        "us": {"ticker": "VWO",     "ccy": "USD", "venue": "NYSE"},
-        "eu": {"ticker": "IEMM.MI", "ccy": "EUR", "venue": "BorsaItaliana"},
-        "fx": "EURUSD",
-    },
-]
 
 DEFAULT_PARAMS = {
+    **PARAMS,
     "lookback": 60,
     "entry_z": 2.0,
     "exit_z": 0.5,
-    "max_holding_days": 5,
-    "use_adf_filter": False,
     "min_corr": 0.8,
-    "txn_fee_bps": 0.5,
-    "slippage_bps": 1.0,
-    "borrow_bps": 30.0,
-    "latency_bars": 1,
-    "position_usd": 1_000_000,
 }
 
-# ====================== CORE LOGIC ======================
+# ====================== STREAMLIT DATA LOADER ======================
 
-def to_returns(s: pd.Series) -> pd.Series:
-    return s.pct_change().fillna(0.0)
+class StreamlitLoader(DataLoader):
+    """DataLoader wrapper that prefers uploaded CSVs and falls back to ./data.
 
-def annualize_rate(bps_per_year: float, days: float) -> float:
-    return (bps_per_year / 10_000.0) * (days / 365.0)
+    The class caches results via ``st.cache_data`` to avoid repeated parsing
+    when the user tweaks parameters.
+    """
 
-class FXNormalizer:
-    def __init__(self, base_ccy: str, fx_map: Dict[str, pd.DataFrame]):
-        self.base = base_ccy
-        self.fx = fx_map  # e.g., {"EURUSD": df}
-
-    def convert(self, px: pd.Series, quote_ccy: str) -> pd.Series:
-        if quote_ccy == self.base:
-            return px
-        key = f"{quote_ccy}{self.base}"
-        if key in self.fx:
-            rate = self.fx[key]["close"].reindex(px.index).ffill()
-            return px * rate
-        inv_key = f"{self.base}{quote_ccy}"
-        if inv_key in self.fx:
-            rate = self.fx[inv_key]["close"].reindex(px.index).ffill()
-            return px / rate
-        raise KeyError(f"No FX series to convert {quote_ccy}->{self.base}")
-
-@dataclass
-class PairData:
-    name: str
-    us_close: pd.Series
-    eu_close: pd.Series
-    us_ccy: str
-    eu_ccy: str
-
-class PairAnalyzer:
-    def __init__(self, fx: FXNormalizer, lookback: int = 60):
-        self.fx = fx
-        self.lookback = lookback
-
-    def to_base_and_align(self, pair: PairData) -> pd.DataFrame:
-        us_base = self.fx.convert(pair.us_close, pair.us_ccy)
-        eu_base = self.fx.convert(pair.eu_close, pair.eu_ccy)
-        df = pd.concat({"US": us_base, "EU": eu_base}, axis=1).dropna()
-        return df
-
-    def build_ratio_df(self, pair: PairData) -> pd.DataFrame:
-        df = self.to_base_and_align(pair)
-        ratio = df["US"] / df["EU"]
-        mu = ratio.rolling(self.lookback).mean()
-        sigma = ratio.rolling(self.lookback).std(ddof=0)
-        z = (ratio - mu) / sigma
-        out = pd.DataFrame({
-            "US": df["US"],
-            "EU": df["EU"],
-            "ratio": ratio,
-            "mu": mu,
-            "sigma": sigma,
-            "z": z,
-        }).dropna()
-        r_us, r_eu = to_returns(out["US"]), to_returns(out["EU"])
-        out["roll_corr"] = r_us.rolling(self.lookback).corr(r_eu)
-        return out.dropna()
-
-    @staticmethod
-    def adf_pvalue(x: pd.Series) -> float:
-        x = x.dropna()
-        if len(x) < 20:
-            return 1.0
-        try:
-            return float(adfuller(x.values, autolag="AIC")[1])
-        except Exception:
-            return 1.0
-
-@dataclass
-class Signal:
-    timestamp: pd.Timestamp
-    direction: int  # +1 long US/short EU; -1 short US/long EU
-    z_at_entry: float
-
-class SignalEngine:
-    def __init__(self, params: Dict):
-        self.p = params
-
-    def generate(self, df: pd.DataFrame) -> List[Signal]:
-        sigs: List[Signal] = []
-        in_pos = 0
-        for t, row in df.iterrows():
-            z = row["z"]
-            corr_ok = (row.get("roll_corr", 1.0) or 0.0) >= self.p["min_corr"]
-            if in_pos == 0 and corr_ok:
-                if z >= self.p["entry_z"]:
-                    sigs.append(Signal(t, -1, float(z)))  # short US / long EU
-                    in_pos = -1
-                elif z <= -self.p["entry_z"]:
-                    sigs.append(Signal(t, +1, float(z)))  # long US / short EU
-                    in_pos = +1
-            elif in_pos != 0 and abs(z) <= self.p["exit_z"]:
-                in_pos = 0
-        return sigs
-
-@dataclass
-class Trade:
-    entry_time: pd.Timestamp
-    exit_time: pd.Timestamp
-    direction: int
-    entry_ratio: float
-    exit_ratio: float
-    z_entry: float
-    pnl_usd: float
-    holding_days: float
-
-class Backtester:
-    def __init__(self, params: Dict):
-        self.p = params
-
-    def _fill_price(self, s: pd.Series, t: pd.Timestamp, latency: int) -> float:
-        idx = s.index.get_indexer([t], method="bfill")[0]
-        idx = min(idx + latency, len(s) - 1)
-        return float(s.iloc[idx])
-
-    def run(self, df: pd.DataFrame, sigs: List[Signal]) -> Tuple[pd.DataFrame, List[Trade]]:
-        trades: List[Trade] = []
-        equity = []
-
-        position = 0
-        entry_t = None
-        entry_ratio = None
-        z_entry = None
-
-        gross = self.p["position_usd"]
-        fee = self.p["txn_fee_bps"] / 10_000.0
-        slip = self.p["slippage_bps"] / 10_000.0
-        latency = self.p["latency_bars"]
-
-        sig_iter = iter(sigs)
-        next_sig = next(sig_iter, None)
-
-        for i, (t, row) in enumerate(df.iterrows()):
-            ratio = float(row["ratio"])
-
-            if position == 0 and next_sig is not None and t >= next_sig.timestamp:
-                entry_px = self._fill_price(df["ratio"], t, latency)
-                position = next_sig.direction
-                entry_t = t
-                entry_ratio = entry_px * (1.0 + slip * np.sign(position))
-                z_entry = next_sig.z_at_entry
-                next_sig = next(sig_iter, None)
-
-            if position != 0:
-                holding_days = (t - entry_t).days if isinstance(t, pd.Timestamp) else i
-                exit_due_to_time = holding_days >= self.p["max_holding_days"]
-                exit_due_to_mean = abs(row["z"]) <= self.p["exit_z"]
-                if exit_due_to_time or exit_due_to_mean:
-                    exit_px = self._fill_price(df["ratio"], t, latency)
-                    exit_px = exit_px * (1.0 - slip * np.sign(position))
-                    ratio_ret = (exit_px / entry_ratio - 1.0) * position
-                    pnl = gross * ratio_ret
-                    pnl -= gross * 2 * fee
-                    pnl -= gross * 2 * slip
-                    pnl -= gross * annualize_rate(self.p["borrow_bps"], max(holding_days, 1))
-
-                    trades.append(Trade(
-                        entry_time=entry_t,
-                        exit_time=t,
-                        direction=position,
-                        entry_ratio=float(entry_ratio),
-                        exit_ratio=float(exit_px),
-                        z_entry=float(z_entry),
-                        pnl_usd=float(pnl),
-                        holding_days=float(holding_days),
-                    ))
-                    position = 0
-                    entry_t = None
-                    entry_ratio = None
-                    z_entry = None
-
-            equity.append((t, trades[-1].pnl_usd if trades else 0.0))
-
-        eq = pd.DataFrame(equity, columns=["time", "last_trade_pnl"]).set_index("time")
-        if trades:
-            eq["cum_pnl"] = np.cumsum([t.pnl_usd for t in trades] + [0]*(len(eq)-len(trades)))
-        else:
-            eq["cum_pnl"] = 0.0
-        return eq, trades
-
-def summarize_trades(trades: List[Trade], position_usd: float) -> pd.DataFrame:
-    if not trades:
-        return pd.DataFrame()
-    df = pd.DataFrame([t.__dict__ for t in trades])
-    df["ret_bps"] = (df["pnl_usd"] / position_usd) * 10_000
-    return df
-
-def kpis(trades: List[Trade], position_usd: float) -> dict:
-    if not trades:
-        return {"trades": 0, "hit_rate": 0.0, "avg_ret_bps": 0.0,
-                "sharpe_like": 0.0, "max_drawdown_usd": 0.0}
-    df = summarize_trades(trades, position_usd)
-    wins = (df["pnl_usd"] > 0).sum()
-    total = len(df)
-    hit = wins / total if total else 0.0
-    avg = df["ret_bps"].mean()
-    std = df["ret_bps"].std(ddof=0)
-    sharpe = (avg / std * np.sqrt(252)) if std and total > 5 else 0.0
-    dd = (df["pnl_usd"].cumsum().cummax() - df["pnl_usd"].cumsum()).max()
-    return {
-        "trades": int(total),
-        "hit_rate": float(hit),
-        "avg_ret_bps": float(avg),
-        "sharpe_like": float(sharpe),
-        "max_drawdown_usd": float(dd),
-    }
-
-# ====================== DATA LOADING FOR STREAMLIT ======================
-
-class StreamlitLoader:
-    def __init__(self, root: str = "./data", uploads: Dict[str, Optional[io.BytesIO]] = None):
+    def __init__(self, root: str = "./data", uploads: Dict[str, Optional[bytes]] = None):
         self.root = root
         self.uploads = uploads or {}
 
@@ -273,19 +50,62 @@ class StreamlitLoader:
         df = df.set_index(df.columns[0]).sort_index()
         if "close" not in df.columns:
             df.columns = [c.lower() for c in df.columns]
-        return df
+        # enforce a single 'close' column
+        if "close" not in df.columns:
+            raise ValueError("Uploaded CSV must contain a 'close' column")
+        return df[["close"]]
 
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
-        up = self.uploads.get(ticker)
+        raw = self.uploads.get(ticker)
         path = os.path.join(self.root, f"{ticker}_daily.csv")
-        raw = up.read() if up else None
         return self._read_cached(f"etf::{ticker}", raw, path)
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
-        up = self.uploads.get(pair)
+        raw = self.uploads.get(pair)
         path = os.path.join(self.root, f"{pair}_daily.csv")
-        raw = up.read() if up else None
         return self._read_cached(f"fx::{pair}", raw, path)
+
+
+def build_fx_map(loader: DataLoader, pair_conf: Dict) -> Dict[str, pd.DataFrame]:
+    fx_needed: set[str] = set()
+    for leg in ("us", "eu"):
+        ccy = pair_conf[leg]["ccy"]
+        if ccy != BASE_CCY:
+            fx_needed.add(f"{ccy}{BASE_CCY}")
+            fx_needed.add(f"{BASE_CCY}{ccy}")
+
+    fx_map: Dict[str, pd.DataFrame] = {}
+    for k in fx_needed:
+        try:
+            fx_map[k] = loader.load_fx_daily(k)
+        except Exception:
+            pass
+    return fx_map
+
+
+def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairData, pd.DataFrame, List]:
+    """Load, FX-normalize, build ratio DF and generate signals for a pair."""
+
+    fx_map = build_fx_map(loader, pair_conf)
+    fx_norm = FXNormalizer(BASE_CCY, fx_map)
+
+    us_df = loader.load_etf_daily(pair_conf["us"]["ticker"])
+    eu_df = loader.load_etf_daily(pair_conf["eu"]["ticker"])
+
+    pair = PairData(
+        name=pair_conf["name"],
+        us_close=us_df["close"],
+        eu_close=eu_df["close"],
+        us_ccy=pair_conf["us"]["ccy"],
+        eu_ccy=pair_conf["eu"]["ccy"],
+    )
+
+    analyzer = PairAnalyzer(fx_norm, lookback=params["lookback"])
+    ratio_df = analyzer.build_ratio_df(pair)
+
+    sig_engine = SignalEngine(params)
+    sigs = sig_engine.generate(ratio_df)
+    return pair, ratio_df, sigs
 
 # ====================== STREAMLIT UI ======================
 
@@ -318,9 +138,23 @@ with st.sidebar:
 
     st.subheader("Upload (optional)")
     st.caption("Provide custom CSVs to override ./data files.")
-    up_us = st.file_uploader(f"{pair_conf['us']['ticker']} (ETF daily CSV)", type=["csv"], key="us")
-    up_eu = st.file_uploader(f"{pair_conf['eu']['ticker']} (ETF daily CSV)", type=["csv"], key="eu")
-    up_eurusd = st.file_uploader("EURUSD (FX daily CSV)", type=["csv"], key="eurusd")
+    key_us = f"us_{pair_conf['name']}"
+    key_eu = f"eu_{pair_conf['name']}"
+    up_us = st.file_uploader(f"{pair_conf['us']['ticker']} (ETF daily CSV)", type=["csv"], key=key_us)
+    up_eu = st.file_uploader(f"{pair_conf['eu']['ticker']} (ETF daily CSV)", type=["csv"], key=key_eu)
+
+    fx_uploads = []
+    for leg in ("us", "eu"):
+        ccy = pair_conf[leg]["ccy"]
+        if ccy != BASE_CCY:
+            fx_pair = f"{ccy}{BASE_CCY}"
+            key_fx = f"fx_{pair_conf['name']}_{fx_pair}"
+            fx_uploads.append(
+                (
+                    fx_pair,
+                    st.file_uploader(f"{fx_pair} (FX daily CSV)", type=["csv"], key=key_fx),
+                )
+            )
 
 params = dict(
     lookback=lookback,
@@ -337,50 +171,31 @@ params = dict(
 )
 
 uploads_map = {
-    pair_conf["us"]["ticker"]: up_us,
-    pair_conf["eu"]["ticker"]: up_eu,
+    pair_conf["us"]["ticker"]: up_us.getvalue() if up_us else None,
+    pair_conf["eu"]["ticker"]: up_eu.getvalue() if up_eu else None,
 }
-if up_eurusd is not None:
-    uploads_map["EURUSD"] = up_eurusd
+for fx_pair, fx_file in fx_uploads:
+    if fx_file is not None:
+        uploads_map[fx_pair] = fx_file.getvalue()
 
 loader = StreamlitLoader(root="./data", uploads=uploads_map)
-
-# Load FX data
-fx_map = {}
-for k in {"EURUSD", "USDGBP", "GBPUSD", "EURGBP"}:
-    try:
-        fx_map[k] = loader.load_fx_daily(k)
-    except Exception:
-        pass
-
-fx_norm = FXNormalizer(BASE_CCY, fx_map)
-
-# Load ETF closes
-us_df = loader.load_etf_daily(pair_conf["us"]["ticker"])
-eu_df = loader.load_etf_daily(pair_conf["eu"]["ticker"])
-
-pair = PairData(
-    name=pair_conf["name"],
-    us_close=us_df["close"],
-    eu_close=eu_df["close"],
-    us_ccy=pair_conf["us"]["ccy"],
-    eu_ccy=pair_conf["eu"]["ccy"],
-)
-
-analyzer = PairAnalyzer(fx_norm, lookback=lookback)
 try:
-    ratio_df = analyzer.build_ratio_df(pair)
+    pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
 except KeyError as e:
     st.error(f"FX conversion missing: {e}. Upload appropriate FX CSV (e.g., EURUSD) or place it in ./data.")
     st.stop()
 
-sig_engine = SignalEngine(params)
-sigs = sig_engine.generate(ratio_df)
-
 bt = Backtester(params)
-equity_df, trades = bt.run(ratio_df, sigs)
+equity_df, trades, market_time = bt.run(ratio_df, sigs)
 trade_df = summarize_trades(trades, params["position_usd"]) if trades else pd.DataFrame()
-metrics = kpis(trades, params["position_usd"]) if trades else {"trades": 0}
+metrics = kpis(trades, params["position_usd"], equity_df, market_time) if trades is not None else {"trades": 0}
+metrics.update({
+    "adf_pvalue": PairAnalyzer.adf_pvalue(np.log(ratio_df["ratio"]).dropna()),
+    "avg_roll_corr": float(ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()) if "roll_corr" in ratio_df else 0.0,
+    "corr_below_min_pct": float((ratio_df.get("roll_corr", pd.Series(dtype=float)) < min_corr).mean() * 100)
+    if "roll_corr" in ratio_df
+    else 0.0,
+})
 
 # ====================== PLOTS ======================
 
@@ -397,6 +212,12 @@ with left:
     ax.set_title(f"{pair.name} — ratio in {BASE_CCY}")
     ax.grid(True, alpha=0.3)
     st.pyplot(fig, clear_figure=True)
+    st.download_button(
+        "Download ratio CSV",
+        data=ratio_df.to_csv().encode(),
+        file_name=f"{pair.name}_ratio.csv",
+        mime="text/csv",
+    )
 
     st.subheader("Equity Curve (cum PnL)")
     if not equity_df.empty:
@@ -405,6 +226,12 @@ with left:
         ax2.set_title("Cumulative PnL (USD)")
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2, clear_figure=True)
+        st.download_button(
+            "Download equity CSV",
+            data=equity_df.to_csv().encode(),
+            file_name=f"{pair.name}_equity.csv",
+            mime="text/csv",
+        )
     else:
         st.info("No trades were generated with current parameters.")
 
@@ -416,7 +243,17 @@ with right:
     c2.metric("Hit Rate", f"{m.get('hit_rate', 0.0)*100:.1f}%")
     c1.metric("Avg Ret (bps)", f"{m.get('avg_ret_bps', 0.0):.2f}")
     c2.metric("Sharpe-like", f"{m.get('sharpe_like', 0.0):.2f}")
+    c1.metric("Avg hold (days)", f"{m.get('avg_hold_days', 0.0):.2f}")
+    c2.metric("Median hold", f"{m.get('median_hold_days', 0.0):.2f}")
+    st.metric("Equity Sharpe", f"{m.get('equity_sharpe', 0.0):.2f}")
     st.metric("Max Drawdown (USD)", f"{m.get('max_drawdown_usd', 0.0):,.0f}")
+    st.metric("Time in market", f"{m.get('time_in_market_pct', 0.0)*100:.1f}%")
+
+    st.divider()
+    st.subheader("Stationarity & Corr Filters")
+    st.metric("ADF p-value (log ratio)", f"{m.get('adf_pvalue', 0.0):.3f}")
+    st.metric("Avg rolling corr", f"{m.get('avg_roll_corr', 0.0):.2f}")
+    st.metric("% corr < min", f"{m.get('corr_below_min_pct', 0.0):.1f}%")
 
     st.divider()
     st.caption("Rolling correlation (returns)")
@@ -432,5 +269,67 @@ st.divider()
 st.subheader("Trade Log")
 if not trade_df.empty:
     st.dataframe(trade_df)
+    st.download_button(
+        "Download trades CSV",
+        data=trade_df.to_csv().encode(),
+        file_name=f"{pair.name}_trades.csv",
+        mime="text/csv",
+    )
 else:
     st.write("No trades yet.")
+
+st.divider()
+st.subheader("Cross-pair z-score heatmap")
+st.caption("Latest mispricing snapshot across configured pairs (z of US/EU price ratio).")
+
+z_cols = []
+summary_rows = []
+for pc in PAIR_CONFIG:
+    try:
+        _, z_df, sigs_df = run_pair(pc, loader, params)
+        bt_pair = Backtester(params)
+        equity_pair, trades_pair, mt_pair = bt_pair.run(z_df, sigs_df)
+        metrics_pair = kpis(trades_pair, params["position_usd"], equity_pair, mt_pair)
+        z_cols.append(z_df[["z"]].rename(columns={"z": pc["name"]}))
+        summary_rows.append({
+            "pair": pc["name"],
+            "trades": metrics_pair.get("trades", 0),
+            "hit_rate": metrics_pair.get("hit_rate", 0.0),
+            "avg_ret_bps": metrics_pair.get("avg_ret_bps", 0.0),
+            "sharpe_like": metrics_pair.get("sharpe_like", 0.0),
+            "equity_sharpe": metrics_pair.get("equity_sharpe", 0.0),
+            "avg_hold_days": metrics_pair.get("avg_hold_days", 0.0),
+            "latest_z": z_df["z"].iloc[-1] if not z_df.empty else np.nan,
+        })
+    except Exception:
+        continue
+
+if z_cols:
+    zscores = pd.concat(z_cols, axis=1).dropna(how="all")
+    latest = zscores.tail(1).T.rename(columns={zscores.index[-1]: "latest_z"})
+    st.dataframe(latest)
+
+    fig4, ax4 = plt.subplots(figsize=(8, 3))
+    cax = ax4.imshow(zscores.T, aspect="auto", interpolation="nearest", cmap="RdBu_r")
+    ax4.set_yticks(range(len(zscores.columns)))
+    ax4.set_yticklabels(zscores.columns)
+    ax4.set_xticks(range(0, len(zscores.index), max(len(zscores.index)//10, 1)))
+    ax4.set_xticklabels(zscores.index.strftime("%Y-%m-%d").to_list()[::max(len(zscores.index)//10, 1)], rotation=45, ha="right")
+    ax4.set_title("Z-score heatmap (time vs pair)")
+    fig4.colorbar(cax, label="z")
+    st.pyplot(fig4, clear_figure=True)
+
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows).set_index("pair")
+        summary_df["hit_rate"] = summary_df["hit_rate"] * 100
+        st.subheader("Cross-pair summary")
+        st.dataframe(summary_df.style.format({
+            "hit_rate": "{:.1f}%",
+            "avg_ret_bps": "{:.2f}",
+            "sharpe_like": "{:.2f}",
+            "equity_sharpe": "{:.2f}",
+            "avg_hold_days": "{:.2f}",
+            "latest_z": "{:.2f}",
+        }))
+else:
+    st.write("Unable to build heatmap – check that all CSVs exist in ./data.")
