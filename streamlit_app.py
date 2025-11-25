@@ -277,53 +277,70 @@ st.subheader("Cross-pair z-score heatmap")
 st.caption("Latest mispricing snapshot across configured pairs (z of US/EU price ratio).")
 
 z_cols = []
+pair_results = {}  # cache metrics per pair
+
 for pc in PAIR_CONFIG:
+    pair_name = pc["name"]
     try:
-        _, z_df, _ = run_pair(pc, loader, params)
-        z_cols.append(z_df[["z"]].rename(columns={"z": pc["name"]}))
+        # run the full pipeline once per pair
+        pair_obj, ratio_tmp, sig_tmp = run_pair(pc, loader, params)
+        bt_tmp = Backtester(params)
+        eq_tmp, trades_tmp, mt_tmp = bt_tmp.run(ratio_tmp, sig_tmp)
+        k = kpis(trades_tmp, params["position_usd"], eq_tmp, mt_tmp)
+
+        # store z-series and metrics
+        z_cols.append(ratio_tmp[["z"]].rename(columns={"z": pair_name}))
+        pair_results[pair_name] = k
     except Exception:
         continue
 
 if z_cols:
     zscores = pd.concat(z_cols, axis=1).dropna(how="all")
-    latest = zscores.tail(1).T.rename(columns={zscores.index[-1]: "latest_z"})
 
-    # Optional: attach a few high-level stats per pair
-    summary_rows = []
-    for pc in PAIR_CONFIG:
-        pair_name = pc["name"]
-        # reuse the same config + params on the loader
-        try:
-            pair_obj, ratio_tmp, sig_tmp = run_pair(pc, loader, params)
-            bt_tmp = Backtester(params)
-            eq_tmp, trades_tmp, mt_tmp = bt_tmp.run(ratio_tmp, sig_tmp)
-            k = kpis(trades_tmp, params["position_usd"], eq_tmp, mt_tmp)
+    # if no overlapping dates, avoid IndexError and show a friendly message
+    if zscores.empty:
+        st.info("Not enough overlapping data across pairs to build cross-pair z-score heatmap.")
+    else:
+        # last timestamp for the “latest z” snapshot
+        last_idx = zscores.index[-1]
+        latest = zscores.tail(1).T.rename(columns={last_idx: "latest_z"})
+
+        # Multi-pair summary table
+        summary_rows = []
+        for pair_name, k in pair_results.items():
             summary_rows.append({
                 "pair": pair_name,
                 "trades": k.get("trades", 0),
                 "hit_rate": k.get("hit_rate", 0.0),
                 "sharpe_like": k.get("sharpe_like", 0.0),
                 "equity_sharpe": k.get("equity_sharpe", 0.0),
-                "latest_z": float(latest.loc[pair_name, "latest_z"]) if pair_name in latest.index else np.nan,
+                "latest_z": float(latest.loc[pair_name, "latest_z"])
+                if pair_name in latest.index else np.nan,
             })
-        except Exception:
-            continue
 
-    if summary_rows:
-        summary_df = pd.DataFrame(summary_rows).set_index("pair")
-        st.subheader("Multi-pair summary")
-        st.dataframe(summary_df)
+        if summary_rows:
+            summary_df = pd.DataFrame(summary_rows).set_index("pair")
+            st.subheader("Multi-pair summary")
+            st.dataframe(summary_df)
 
-    st.dataframe(latest)
+        # Latest z snapshot table
+        st.dataframe(latest)
 
-    fig4, ax4 = plt.subplots(figsize=(8, 3))
-    cax = ax4.imshow(zscores.T, aspect="auto", interpolation="nearest", cmap="RdBu_r")
-    ax4.set_yticks(range(len(zscores.columns)))
-    ax4.set_yticklabels(zscores.columns)
-    ax4.set_xticks(range(0, len(zscores.index), max(len(zscores.index)//10, 1)))
-    ax4.set_xticklabels(zscores.index.strftime("%Y-%m-%d").to_list()[::max(len(zscores.index)//10, 1)], rotation=45, ha="right")
-    ax4.set_title("Z-score heatmap (time vs pair)")
-    fig4.colorbar(cax, label="z")
-    st.pyplot(fig4, clear_figure=True)
+        # Heatmap
+        fig4, ax4 = plt.subplots(figsize=(8, 3))
+        cax = ax4.imshow(zscores.T, aspect="auto", interpolation="nearest", cmap="RdBu_r")
+        ax4.set_yticks(range(len(zscores.columns)))
+        ax4.set_yticklabels(zscores.columns)
+
+        step = max(len(zscores.index) // 10, 1)
+        ax4.set_xticks(range(0, len(zscores.index), step))
+        ax4.set_xticklabels(
+            zscores.index.strftime("%Y-%m-%d").tolist()[::step],
+            rotation=45,
+            ha="right",
+        )
+        ax4.set_title("Z-score heatmap (time vs pair)")
+        fig4.colorbar(cax, label="z")
+        st.pyplot(fig4, clear_figure=True)
 else:
     st.write("Unable to build heatmap – check that all CSVs exist in ./data.")
