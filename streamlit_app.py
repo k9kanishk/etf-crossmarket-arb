@@ -287,6 +287,33 @@ for pc in PAIR_CONFIG:
 if z_cols:
     zscores = pd.concat(z_cols, axis=1).dropna(how="all")
     latest = zscores.tail(1).T.rename(columns={zscores.index[-1]: "latest_z"})
+
+    # Optional: attach a few high-level stats per pair
+    summary_rows = []
+    for pc in PAIR_CONFIG:
+        pair_name = pc["name"]
+        # reuse the same config + params on the loader
+        try:
+            pair_obj, ratio_tmp, sig_tmp = run_pair(pc, loader, params)
+            bt_tmp = Backtester(params)
+            eq_tmp, trades_tmp, mt_tmp = bt_tmp.run(ratio_tmp, sig_tmp)
+            k = kpis(trades_tmp, params["position_usd"], eq_tmp, mt_tmp)
+            summary_rows.append({
+                "pair": pair_name,
+                "trades": k.get("trades", 0),
+                "hit_rate": k.get("hit_rate", 0.0),
+                "sharpe_like": k.get("sharpe_like", 0.0),
+                "equity_sharpe": k.get("equity_sharpe", 0.0),
+                "latest_z": float(latest.loc[pair_name, "latest_z"]) if pair_name in latest.index else np.nan,
+            })
+        except Exception:
+            continue
+
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows).set_index("pair")
+        st.subheader("Multi-pair summary")
+        st.dataframe(summary_df)
+
     st.dataframe(latest)
 
     fig4, ax4 = plt.subplots(figsize=(8, 3))
