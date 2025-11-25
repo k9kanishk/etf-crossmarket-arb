@@ -125,12 +125,15 @@ def kpis_from_equity(eq: pd.DataFrame, position_usd: float) -> dict:
     }
 
 
-def kpis(trades: List[Trade], position_usd: float, equity: pd.DataFrame | None = None, market_time: dict | None = None) -> dict:
+def kpis(trades: List[Trade], position_usd: float, equity: pd.DataFrame | None = None,
+         market_time: dict | None = None) -> dict:
     base = {"trades": 0, "hit_rate": 0.0, "avg_ret_bps": 0.0, "sharpe_like": 0.0, "max_drawdown_usd": 0.0}
     if not trades:
         base.update(kpis_from_equity(equity, position_usd))
         if market_time:
-            base["time_in_market_pct"] = float(market_time.get("days_in_market", 0) / market_time.get("total_days", 1))
+            num = market_time.get("days_in_market", 0)
+            denom = market_time.get("total_days", 0)
+            base["time_in_market_pct"] = float(num / denom) if denom else 0.0
         return base
 
     df = summarize_trades(trades, position_usd)
@@ -153,5 +156,7 @@ def kpis(trades: List[Trade], position_usd: float, equity: pd.DataFrame | None =
 
     base.update(kpis_from_equity(equity, position_usd))
     if market_time:
-        base["time_in_market_pct"] = float(market_time.get("days_in_market", 0) / market_time.get("total_days", 1))
+        num = market_time.get("days_in_market", 0)
+        denom = market_time.get("total_days", 0)
+        base["time_in_market_pct"] = float(num / denom) if denom else 0.0
     return base
