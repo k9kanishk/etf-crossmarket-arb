@@ -42,5 +42,26 @@ Place ETF files as `<TICKER>_daily.csv` and FX files as `<PAIR>_daily.csv` under
 - `run.py`: small CLI entry point that exercises the pipeline.
 - `data/`: demo CSVs for the example ETF and FX series.
 
+## Assumptions
+
+To keep the project focused and lightweight, the current implementation makes a few simplifying assumptions:
+
+- **Daily bars only** – all analysis is done on end-of-day close prices (no intraday microstructure).
+- **Perfect borrow / shorting** – both legs of each pair are treated as freely shortable with a configurable borrow cost (no locate risk).
+- **No explicit market impact model** – transaction costs are modeled as per-side bps plus an extra slippage bps, but we do not simulate order book depth or queue position.
+- **Single base currency** – all PnL is reported in `BASE_CCY` (currently `"USD"`). FX risk is modeled via closing FX rates only (no intraday FX basis).
+- **Static pair list** – the universe is defined in `PAIR_CONFIG` and loaded from CSV (or a single vendor) without dynamic universe selection.
+
+## Limitations & possible extensions
+
+Some obvious next steps if you wanted to push this closer to production:
+
+- **Intraday granularity** – move from daily closes to 5–15 minute bars and re-estimate spread dynamics on shorter horizons.
+- **More detailed execution model** – plug in a venue-aware simulator with realistic fee schedules, tick sizes, and order types.
+- **Risk controls** – add limits on per-pair and aggregate exposure, plus kill switches when correlations break or volatility spikes.
+- **Regime analysis** – detect periods where the spread stops behaving (e.g. correlation drops, ADF fails) and automatically turn off trading.
+- **Richer multi-venue support** – extend the pair definition to handle multiple European listings (LSE/Xetra/Borsa) and venue-specific FX feeds.
+
+
 ## Talking points
 If you want a one-liner for interviews: “I built a cross-market ETF arbitrage tracker that normalizes U.S. and European listings via FX, detects >2σ mispricings with a z-score model, and backtests mean-reversion trades with latency, cost, and borrow modeling.”
