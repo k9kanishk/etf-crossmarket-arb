@@ -17,16 +17,12 @@ import streamlit as st
 from arbitrage.backtest import Backtester, kpis, summarize_trades
 from arbitrage.config import BASE_CCY, PAIR_CONFIG, PARAMS
 from arbitrage.core import FXNormalizer, PairAnalyzer, PairData, SignalEngine
-from arbitrage.data import DataLoader
-from arbitrage.data import DemoCSVLoader, TiingoLoader
+
 from pathlib import Path
+from arbitrage.data import DataLoader, YahooLoader
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-
-st.sidebar.subheader("Data source")
-source = st.sidebar.selectbox("Source", ["Demo CSV", "Tiingo"])
-
-
+# Single live loader for the whole app
+loader: DataLoader = YahooLoader()
 
 
 
@@ -208,14 +204,6 @@ for fx_pair, fx_file in fx_uploads:
     if fx_file is not None:
         uploads_map[fx_pair] = fx_file.getvalue()
 
-# choose base loader depending on sidebar selection
-if source == "Tiingo":
-    base_loader = TiingoLoader(csv_path=str(DATA_DIR))
-    st.sidebar.caption("Using Tiingo EOD for ETFs. FX still from ./data CSVs.")
-else:
-    base_loader = DemoCSVLoader(str(DATA_DIR))
-
-loader = StreamlitLoader(root=str(DATA_DIR), uploads=uploads_map, base_loader=base_loader)
 
 try:
     pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
