@@ -9,3 +9,4 @@ streamlit
 requests
 python-dotenv
 pytest
+tiingo>=0.16.0
