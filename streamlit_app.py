@@ -34,104 +34,7 @@ DEFAULT_PARAMS = {
     "min_corr": 0.8,
 }
 
-# ====================== STREAMLIT DATA LOADER ======================
 
-class StreamlitLoader(DataLoader):
-    """DataLoader wrapper that prefers uploaded CSVs and falls back to a base loader
-    (Tiingo or DemoCSV) and then to ./data as a last resort.
-    """
-
-    def __init__(
-        self,
-        root: str = "./data",
-        uploads: Dict[str, Optional[bytes]] = None,
-        base_loader: DataLoader | None = None,
-    ):
-        self.root = root
-        self.uploads = uploads or {}
-        self.base_loader = base_loader
-
-    @st.cache_data(show_spinner=False)
-    def _read_cached(_self, key: str, raw: bytes | None, path: str | None) -> pd.DataFrame:
-        if raw is not None:
-            df = pd.read_csv(io.BytesIO(raw), parse_dates=[0])
-        elif path is not None:
-            df = pd.read_csv(path, parse_dates=[0])
-        else:
-            raise ValueError("No data source provided to _read_cached")
-        df = df.set_index(df.columns[0]).sort_index()
-        if "close" not in df.columns:
-            df.columns = [c.lower() for c in df.columns]
-        if "close" not in df.columns:
-            raise ValueError("Uploaded CSV must contain a 'close' column")
-        return df[["close"]]
-
-    def load_etf_daily(self, ticker: str) -> pd.DataFrame:
-        raw = self.uploads.get(ticker)
-        if raw is not None:
-            return self._read_cached(f"etf::{ticker}", raw, None)
-
-        # try base loader (Tiingo or DemoCSV)
-        if self.base_loader is not None:
-            try:
-                return self.base_loader.load_etf_daily(ticker)
-            except Exception:
-                pass
-
-        # fall back to local CSV
-        path = os.path.join(self.root, f"{ticker}_daily.csv")
-        return self._read_cached(f"etf::{ticker}", None, path)
-
-    def load_fx_daily(self, pair: str) -> pd.DataFrame:
-        raw = self.uploads.get(pair)
-        if raw is not None:
-            return self._read_cached(f"fx::{pair}", raw, None)
-
-        if self.base_loader is not None:
-            try:
-                return self.base_loader.load_fx_daily(pair)
-            except Exception:
-                pass
-
-        path = os.path.join(self.root, f"{pair}_daily.csv")
-        return self._read_cached(f"fx::{pair}", None, path)
-
-
-
-def build_fx_map(loader: DataLoader) -> Dict[str, pd.DataFrame]:
-    fx_map: Dict[str, pd.DataFrame] = {}
-    for k in {"EURUSD", "USDGBP", "GBPUSD", "EURGBP"}:
-        try:
-            fx_map[k] = loader.load_fx_daily(k)
-        except Exception:
-            # optional – only complain later if conversion fails
-            pass
-    return fx_map
-
-
-def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairData, pd.DataFrame, List]:
-    """Load, FX-normalize, build ratio DF and generate signals for a pair."""
-
-    fx_map = build_fx_map(loader)
-    fx_norm = FXNormalizer(BASE_CCY, fx_map)
-
-    us_df = loader.load_etf_daily(pair_conf["us"]["ticker"])
-    eu_df = loader.load_etf_daily(pair_conf["eu"]["ticker"])
-
-    pair = PairData(
-        name=pair_conf["name"],
-        us_close=us_df["close"],
-        eu_close=eu_df["close"],
-        us_ccy=pair_conf["us"]["ccy"],
-        eu_ccy=pair_conf["eu"]["ccy"],
-    )
-
-    analyzer = PairAnalyzer(fx_norm, lookback=params["lookback"])
-    ratio_df = analyzer.build_ratio_df(pair)
-
-    sig_engine = SignalEngine(params)
-    sigs = sig_engine.generate(ratio_df)
-    return pair, ratio_df, sigs
 
 # ====================== STREAMLIT UI ======================
 
@@ -162,26 +65,7 @@ with st.sidebar:
                                  float(DEFAULT_PARAMS["borrow_bps"]), 5.0)
     latency_bars = st.number_input("Latency bars", 0, 5, int(DEFAULT_PARAMS["latency_bars"]))
 
-    st.subheader("Upload (optional)")
-    st.caption("Provide custom CSVs to override ./data files.")
-    key_us = f"us_{pair_conf['name']}"
-    key_eu = f"eu_{pair_conf['name']}"
-    up_us = st.file_uploader(f"{pair_conf['us']['ticker']} (ETF daily CSV)", type=["csv"], key=key_us)
-    up_eu = st.file_uploader(f"{pair_conf['eu']['ticker']} (ETF daily CSV)", type=["csv"], key=key_eu)
-
-    fx_uploads = []
-    for leg in ("us", "eu"):
-        ccy = pair_conf[leg]["ccy"]
-        if ccy != BASE_CCY:
-            fx_pair = f"{ccy}{BASE_CCY}"
-            key_fx = f"fx_{pair_conf['name']}_{fx_pair}"
-            fx_uploads.append(
-                (
-                    fx_pair,
-                    st.file_uploader(f"{fx_pair} (FX daily CSV)", type=["csv"], key=key_fx),
-                )
-            )
-
+ 
 params = dict(
     lookback=lookback,
     entry_z=entry_z,
@@ -196,20 +80,7 @@ params = dict(
     position_usd=position_usd,
 )
 
-uploads_map = {
-    pair_conf["us"]["ticker"]: up_us.getvalue() if up_us else None,
-    pair_conf["eu"]["ticker"]: up_eu.getvalue() if up_eu else None,
-}
-for fx_pair, fx_file in fx_uploads:
-    if fx_file is not None:
-        uploads_map[fx_pair] = fx_file.getvalue()
 
-
-try:
-    pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
-except KeyError as e:
-    st.error(f"FX conversion missing: {e}. Upload appropriate FX CSV (e.g., EURUSD) or place it in ./data.")
-    st.stop()
 
 bt = Backtester(params)
 equity_df, trades, market_time = bt.run(ratio_df, sigs)
