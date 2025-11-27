@@ -122,14 +122,14 @@ import functools
 import pandas as pd
 import yfinance as yf
 
-from .data import DataLoader  # adjust import if needed
+from .data import DataLoader  # adjust import path if needed
 
 
 class YahooLoader(DataLoader):
     """
     Live data loader using Yahoo Finance via yfinance.
 
-    - ETFs: tickers taken directly from PAIR_CONFIG (SPY, CSPX.L, VWO, IEMM.MI, ...)
+    - ETFs: tickers taken directly from PAIR_CONFIG (SPY, CSTNL, VWO, IZIZF, ...)
     - FX:   internal 'EURUSD' -> Yahoo 'EURUSD=X', etc.
     """
 
@@ -137,39 +137,60 @@ class YahooLoader(DataLoader):
         self.start = start
         self.end = end
 
-    def _download(self, symbol: str) -> pd.DataFrame:
+    def _raw_download(self, symbol: str) -> pd.DataFrame:
         df = yf.download(
             symbol,
             start=self.start,
             end=self.end,
             progress=False,
-            auto_adjust=False,
+            auto_adjust=False,  # keep Adj Close available
         )
 
         # Ensure we really have a DataFrame with rows
         if not isinstance(df, pd.DataFrame) or df.empty:
             raise ValueError(f"YahooLoader: no data returned for {symbol}")
 
-        # Pick adjusted close if available, else close
+        return df
+
+    def _extract_close(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        Extract a single 'close' series from a Yahoo-style OHLCV frame,
+        handling both simple and MultiIndex columns.
+        """
+        # Prefer adjusted close if present
         if "Adj Close" in df.columns:
-            series = df["Adj Close"]
+            sub = df["Adj Close"]
         elif "Close" in df.columns:
-            series = df["Close"]
+            sub = df["Close"]
         else:
             raise ValueError(
-                f"YahooLoader: expected 'Adj Close' or 'Close' columns for {symbol}, "
-                f"got {list(df.columns)}"
+                f"YahooLoader: expected 'Adj Close' or 'Close' for {symbol}, "
+                f"got columns: {list(df.columns)}"
             )
+
+        # sub may be Series or DataFrame (e.g. MultiIndex first level)
+        if isinstance(sub, pd.DataFrame):
+            # If it's a single-column DataFrame, take that column
+            if sub.shape[1] == 1:
+                series = sub.iloc[:, 0]
+            else:
+                # If somehow we got multiple columns, take the first as a fallback
+                series = sub.iloc[:, 0]
+        else:
+            series = sub
 
         series = series.dropna()
         if series.empty:
             raise ValueError(f"YahooLoader: all close values NaN for {symbol}")
 
-        # Turn Series into a proper 2D DataFrame
         out = series.to_frame(name="close")
         out.index = pd.to_datetime(out.index).tz_localize(None)
         out = out.sort_index()
         return out
+
+    def _download(self, symbol: str) -> pd.DataFrame:
+        df = self._raw_download(symbol)
+        return self._extract_close(df, symbol)
 
     @functools.lru_cache(maxsize=64)
     def _download_cached(self, symbol: str) -> pd.DataFrame:
