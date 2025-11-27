@@ -18,6 +18,20 @@ from arbitrage.backtest import Backtester, kpis, summarize_trades
 from arbitrage.config import BASE_CCY, PAIR_CONFIG, PARAMS
 from arbitrage.core import FXNormalizer, PairAnalyzer, PairData, SignalEngine
 from arbitrage.data import DataLoader
+from arbitrage.data import DemoCSVLoader, TiingoLoader
+from pathlib import Path
+
+DATA_DIR = Path(__file__).resolve().parent / "data"
+
+st.sidebar.subheader("Data source")
+source = st.sidebar.selectbox("Source", ["Demo CSV", "Tiingo"])
+
+if source == "Tiingo":
+    loader = TiingoLoader(csv_path=str(DATA_DIR))
+    st.sidebar.caption("Using Tiingo EOD for ETFs. FX still from ./data CSVs.")
+else:
+    loader = DemoCSVLoader(str(DATA_DIR))
+
 
 
 DEFAULT_PARAMS = {
