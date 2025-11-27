@@ -122,64 +122,37 @@ import functools
 import pandas as pd
 import yfinance as yf
 
-from .data import DataLoader  # adjust import path if needed
+from .data import DataLoader  # keep this if YahooLoader is in a separate module
 
 
 class YahooLoader(DataLoader):
     """
     Live data loader using Yahoo Finance via yfinance.
 
-    - ETFs: tickers taken directly from PAIR_CONFIG (SPY, CSTNL, VWO, IZIZF, ...)
+    - ETFs: tickers taken directly from PAIR_CONFIG (SPY, CSTNL, VWO, IZZIF, ...)
     - FX:   internal 'EURUSD' -> Yahoo 'EURUSD=X', etc.
+
+    Returns DataFrames indexed by date with a single column: 'close'.
     """
 
-    def __init__(self, start: str | None = None, end: str | None = None) -> None:
-        self.start = start
-        self.end = end
+    def __init__(self, period: str = "2y") -> None:
+        # how much history to pull from Yahoo, tweak if needed
+        self.period = period
 
-    def _raw_download(self, symbol: str) -> pd.DataFrame:
+    def _download(self, symbol: str) -> pd.DataFrame:
         df = yf.download(
             symbol,
-            start=self.start,
-            end=self.end,
+            period=self.period,
+            auto_adjust=True,   # already adjusted, so we can use 'Close'
             progress=False,
-            auto_adjust=False,  # keep Adj Close available
         )
 
-        # Ensure we really have a DataFrame with rows
-        if not isinstance(df, pd.DataFrame) or df.empty:
+        if df.empty:
             raise ValueError(f"YahooLoader: no data returned for {symbol}")
 
-        return df
-
-    def _extract_close(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """
-        Extract a single 'close' series from a Yahoo-style OHLCV frame,
-        handling both simple and MultiIndex columns.
-        """
-        # Prefer adjusted close if present
-        if "Adj Close" in df.columns:
-            sub = df["Adj Close"]
-        elif "Close" in df.columns:
-            sub = df["Close"]
-        else:
-            raise ValueError(
-                f"YahooLoader: expected 'Adj Close' or 'Close' for {symbol}, "
-                f"got columns: {list(df.columns)}"
-            )
-
-        # sub may be Series or DataFrame (e.g. MultiIndex first level)
-        if isinstance(sub, pd.DataFrame):
-            # If it's a single-column DataFrame, take that column
-            if sub.shape[1] == 1:
-                series = sub.iloc[:, 0]
-            else:
-                # If somehow we got multiple columns, take the first as a fallback
-                series = sub.iloc[:, 0]
-        else:
-            series = sub
-
-        series = series.dropna()
+        # prefer Adj Close if present, else Close
+        col = "Adj Close" if "Adj Close" in df.columns else "Close"
+        series = df[col].dropna()
         if series.empty:
             raise ValueError(f"YahooLoader: all close values NaN for {symbol}")
 
@@ -188,24 +161,17 @@ class YahooLoader(DataLoader):
         out = out.sort_index()
         return out
 
-    def _download(self, symbol: str) -> pd.DataFrame:
-        df = yf.download(symbol, period=self.period, auto_adjust=True, progress=False)
-        if df.empty:
-            raise ValueError(f"No data returned from Yahoo for {symbol}")
-
-        col = "Adj Close" if "Adj Close" in df.columns else "Close"
-        out = pd.DataFrame({"close": df[col]})
-        out.index = pd.to_datetime(out.index).tz_localize(None)
-        out = out.sort_index()
-        return out
-
     @functools.lru_cache(maxsize=64)
     def _download_cached(self, symbol: str) -> pd.DataFrame:
+        # cache by symbol so multiple calls (pairs, FX) don't re-hit Yahoo
         return self._download(symbol)
 
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
+        # e.g. "SPY", "CSTNL", "VWO", "IZIZF"
         return self._download_cached(ticker)
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
+        # internal "EURUSD" -> Yahoo "EURUSD=X"
         symbol = pair + "=X"
         return self._download_cached(symbol)
+
