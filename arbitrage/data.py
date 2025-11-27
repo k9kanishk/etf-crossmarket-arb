@@ -47,17 +47,19 @@ class DemoCSVLoader(DataLoader):
         return self._read(f"{self.root}/{pair}_daily.csv")
 
 import os
+import logging
 import pandas as pd
 from tiingo import TiingoClient
 
-# ... keep DataLoader and DemoCSVLoader exactly as they are above ...
+from .data import DataLoader, DemoCSVLoader  # adjust import if needed
+
 
 class TiingoLoader(DataLoader):
     """
-    Data loader that pulls daily ETF prices from the Tiingo API.
+    Data loader that pulls daily ETF prices from Tiingo when possible.
 
-    - ETFs: from Tiingo (EOD)
-    - FX:   currently delegated to DemoCSVLoader, using local CSVs.
+    - ETFs: try Tiingo, fall back to local CSVs via DemoCSVLoader
+    - FX:   always from local CSVs (EURUSD_daily.csv etc.) for now
     """
 
     def __init__(
@@ -65,10 +67,9 @@ class TiingoLoader(DataLoader):
         start: str | None = None,
         end: str | None = None,
         api_key: str | None = None,
-        csv_path: str = "data",   # <-- accepts csv_path now
-        **_: object,              # <-- swallows any extra kwargs safely
+        csv_path: str = "data",
+        **_: object,  # swallow any extra kwargs safely
     ) -> None:
-        # Configure Tiingo client
         cfg: dict[str, object] = {"session": True}
         cfg["api_key"] = api_key or os.getenv("TIINGO_API_KEY")
         if not cfg["api_key"]:
@@ -80,10 +81,8 @@ class TiingoLoader(DataLoader):
         self.start = start
         self.end = end
 
-        # Reuse CSV loader for FX
-        self.fx_csv_loader = DemoCSVLoader(csv_path)
-
-    # ---- helpers ---------------------------------------------------------
+        # use same CSV loader you already rely on
+        self.csv_loader = DemoCSVLoader(csv_path)
 
     def _date_kwargs(self) -> dict[str, str]:
         kw: dict[str, str] = {}
@@ -93,28 +92,28 @@ class TiingoLoader(DataLoader):
             kw["endDate"] = self.end
         return kw
 
-    # ---- public API used by Explorer / Streamlit ------------------------
-
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
-        """
-        Return a DataFrame with DatetimeIndex and 'close' column
-        (using adjClose if available).
-        """
-        df = self.client.get_dataframe(
-            ticker,
-            frequency="daily",
-            **self._date_kwargs(),
-        )
+        """Try Tiingo; on any error fall back to CSV."""
+        try:
+            df = self.client.get_dataframe(
+                ticker,
+                frequency="daily",
+                **self._date_kwargs(),
+            )
+            # Tiingo EOD uses adjClose for adjusted prices
+            col = "adjClose" if "adjClose" in df.columns else "close"
+            out = pd.DataFrame({"close": df[col]})
+            out.index = pd.to_datetime(out.index).tz_localize(None)
+            out = out.sort_index()
+            return out
 
-        col = "adjClose" if "adjClose" in df.columns else "close"
-        out = pd.DataFrame({"close": df[col]})
-        out.index = pd.to_datetime(out.index).tz_localize(None)
-        out = out.sort_index()
-        return out
+        except Exception as e:
+            logging.warning(
+                "TiingoLoader: failed for %s (%s). Falling back to CSV.", ticker, e
+            )
+            # this will read e.g. data/CSPX.L_daily.csv which you already have
+            return self.csv_loader.load_etf_daily(ticker)
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
-        """
-        For now, FX still comes from your CSVs (e.g. EURUSD_daily.csv).
-        """
-        return self.fx_csv_loader.load_fx_daily(pair)
-
+        """Currently always load FX from local CSVs."""
+        return self.csv_loader.load_fx_daily(pair)
