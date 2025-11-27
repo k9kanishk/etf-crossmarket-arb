@@ -5,9 +5,7 @@ This file reuses the reusable arbitrage core/backtest modules to keep the
 interactive dashboard in sync with the backtest/CLI pipeline.
 """
 
-import io
-import os
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,8 +15,6 @@ import streamlit as st
 from arbitrage.backtest import Backtester, kpis, summarize_trades
 from arbitrage.config import BASE_CCY, PAIR_CONFIG, PARAMS
 from arbitrage.core import FXNormalizer, PairAnalyzer, PairData, SignalEngine
-
-from pathlib import Path
 from arbitrage.data import DataLoader, YahooLoader
 
 # Single live loader for the whole app
@@ -36,7 +32,10 @@ DEFAULT_PARAMS = {
 
 st.set_page_config(page_title="ETF Cross-Market Arbitrage", layout="wide")
 st.title("Global ETF Correlation & Cross-Market Arbitrage Explorer")
-st.caption("Normalize across FX, detect mispricings via z-scores, and backtest mean-reversion trades.")
+st.caption(
+    "Normalize across FX, detect mispricings via z-scores, "
+    "and backtest mean-reversion trades."
+)
 
 with st.sidebar:
     st.header("Controls")
@@ -51,15 +50,25 @@ with st.sidebar:
     exit_z = st.slider("Exit |z|", 0.1, 2.0, float(DEFAULT_PARAMS["exit_z"]), 0.1)
     max_hold = st.slider("Max holding (days)", 1, 20, int(DEFAULT_PARAMS["max_holding_days"]))
     min_corr = st.slider("Min rolling corr", 0.0, 1.0, float(DEFAULT_PARAMS["min_corr"]), 0.05)
-    position_usd = st.number_input("Position per leg (USD)", 50_000, 5_000_000,
-                                   int(DEFAULT_PARAMS["position_usd"]), 50_000)
-    txn_fee_bps = st.number_input("Txn fee (bps per side)", 0.0, 10.0,
-                                  float(DEFAULT_PARAMS["txn_fee_bps"]), 0.1)
-    slippage_bps = st.number_input("Slippage (bps per side)", 0.0, 20.0,
-                                   float(DEFAULT_PARAMS["slippage_bps"]), 0.1)
-    borrow_bps = st.number_input("Borrow cost (annual bps)", 0.0, 1000.0,
-                                 float(DEFAULT_PARAMS["borrow_bps"]), 5.0)
-    latency_bars = st.number_input("Latency bars", 0, 5, int(DEFAULT_PARAMS["latency_bars"]))
+    position_usd = st.number_input(
+        "Position per leg (USD)",
+        50_000,
+        5_000_000,
+        int(DEFAULT_PARAMS["position_usd"]),
+        50_000,
+    )
+    txn_fee_bps = st.number_input(
+        "Txn fee (bps per side)", 0.0, 10.0, float(DEFAULT_PARAMS["txn_fee_bps"]), 0.1
+    )
+    slippage_bps = st.number_input(
+        "Slippage (bps per side)", 0.0, 20.0, float(DEFAULT_PARAMS["slippage_bps"]), 0.1
+    )
+    borrow_bps = st.number_input(
+        "Borrow cost (annual bps)", 0.0, 1000.0, float(DEFAULT_PARAMS["borrow_bps"]), 5.0
+    )
+    latency_bars = st.number_input(
+        "Latency bars", 0, 5, int(DEFAULT_PARAMS["latency_bars"])
+    )
 
 params = dict(
     lookback=lookback,
@@ -77,19 +86,25 @@ params = dict(
 
 # ====================== DATA + SIGNAL PIPELINE ======================
 
+
 def build_fx_map(loader: DataLoader) -> Dict[str, pd.DataFrame]:
     """Load FX series needed to normalize into BASE_CCY."""
     fx_map: Dict[str, pd.DataFrame] = {}
     for k in {"EURUSD", "USDGBP", "GBPUSD", "EURGBP"}:
         try:
-            fx_map[k] = loader.load_fx_daily(k)
-        except Exception:
+            df_fx = loader.load_fx_daily(k)
+            fx_map[k] = df_fx
+            st.write(f"DEBUG – FX {k} length:", len(df_fx))
+        except Exception as e:
+            st.write(f"DEBUG – failed to load FX {k}: {e}")
             # optional – only complain later if conversion fails
-            pass
+            continue
     return fx_map
 
 
-def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairData, pd.DataFrame, List]:
+def run_pair(
+    pair_conf: Dict, loader: DataLoader, params: Dict
+) -> tuple[PairData, pd.DataFrame, List]:
     """Load, FX-normalize, build ratio DF and generate signals for a pair."""
     fx_map = build_fx_map(loader)
     fx_norm = FXNormalizer(BASE_CCY, fx_map)
@@ -116,14 +131,22 @@ def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairDat
         eu_ccy=pair_conf["eu"]["ccy"],
     )
 
+    # DEBUG: aligned raw overlaps
+    aligned_raw = pd.concat(
+        [pair.us_close.rename("US"), pair.eu_close.rename("EU")],
+        axis=1,
+        join="inner",
+    )
+    st.write(
+        f"DEBUG – aligned raw US/EU shape for {pair_conf['name']}:",
+        aligned_raw.shape,
+    )
+
     analyzer = PairAnalyzer(fx_norm, lookback=params["lookback"])
     ratio_df = analyzer.build_ratio_df(pair)
 
     # DEBUG: what did the analyzer return?
-    st.write(
-        f"DEBUG – ratio_df shape for {pair_conf['name']}:",
-        ratio_df.shape
-    )
+    st.write(f"DEBUG – ratio_df shape for {pair_conf['name']}:", ratio_df.shape)
     if not ratio_df.empty:
         cols = [c for c in ["US", "EU", "ratio", "mu", "sigma", "z"] if c in ratio_df.columns]
         st.write("DEBUG – ratio_df tail:", ratio_df[cols].tail())
@@ -131,8 +154,8 @@ def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairDat
         # fail fast instead of silently plotting an empty chart
         raise ValueError(
             f"ratio_df is empty for {pair_conf['name']} – "
-            f"likely no overlapping dates after alignment/FX. "
-            f"Check tickers and FX series."
+            f"likely not enough history or no overlapping dates after alignment/FX. "
+            f"Check tickers, FX series, and lookback window."
         )
 
     sig_engine = SignalEngine(params)
@@ -151,14 +174,27 @@ except Exception as e:
 bt = Backtester(params)
 equity_df, trades, market_time = bt.run(ratio_df, sigs)
 trade_df = summarize_trades(trades, params["position_usd"]) if trades else pd.DataFrame()
-metrics = kpis(trades, params["position_usd"], equity_df, market_time) if trades is not None else {"trades": 0}
-metrics.update({
-    "adf_pvalue": PairAnalyzer.adf_pvalue(np.log(ratio_df["ratio"]).dropna()),
-    "avg_roll_corr": float(ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()) if "roll_corr" in ratio_df else 0.0,
-    "corr_below_min_pct": float((ratio_df.get("roll_corr", pd.Series(dtype=float)) < min_corr).mean() * 100)
-    if "roll_corr" in ratio_df
-    else 0.0,
-})
+metrics = (
+    kpis(trades, params["position_usd"], equity_df, market_time)
+    if trades is not None
+    else {"trades": 0}
+)
+metrics.update(
+    {
+        "adf_pvalue": PairAnalyzer.adf_pvalue(np.log(ratio_df["ratio"]).dropna()),
+        "avg_roll_corr": float(
+            ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()
+        )
+        if "roll_corr" in ratio_df
+        else 0.0,
+        "corr_below_min_pct": float(
+            (ratio_df.get("roll_corr", pd.Series(dtype=float)) < min_corr).mean()
+            * 100
+        )
+        if "roll_corr" in ratio_df
+        else 0.0,
+    }
+)
 
 # ====================== PLOTS ======================
 
@@ -203,14 +239,14 @@ with right:
     m = metrics or {}
     c1, c2 = st.columns(2)
     c1.metric("Trades", m.get("trades", 0))
-    c2.metric("Hit Rate", f"{m.get('hit_rate', 0.0)*100:.1f}%")
+    c2.metric("Hit Rate", f"{m.get('hit_rate', 0.0) * 100:.1f}%")
     c1.metric("Avg Ret (bps)", f"{m.get('avg_ret_bps', 0.0):.2f}")
     c2.metric("Sharpe-like", f"{m.get('sharpe_like', 0.0):.2f}")
     c1.metric("Avg hold (days)", f"{m.get('avg_hold_days', 0.0):.2f}")
     c2.metric("Median hold", f"{m.get('median_hold_days', 0.0):.2f}")
     st.metric("Equity Sharpe", f"{m.get('equity_sharpe', 0.0):.2f}")
     st.metric("Max Drawdown (USD)", f"{m.get('max_drawdown_usd', 0.0):,.0f}")
-    st.metric("Time in market", f"{m.get('time_in_market_pct', 0.0)*100:.1f}%")
+    st.metric("Time in market", f"{m.get('time_in_market_pct', 0.0) * 100:.1f}%")
 
     st.divider()
     st.subheader("Stationarity & Corr Filters")
@@ -245,19 +281,17 @@ st.divider()
 st.subheader("Cross-pair z-score heatmap")
 st.caption("Latest mispricing snapshot across configured pairs (z of US/EU price ratio).")
 
-z_cols = []
-pair_results = {}  # cache metrics per pair
+z_cols: List[pd.DataFrame] = []
+pair_results: Dict[str, Dict] = {}  # cache metrics per pair
 
 for pc in PAIR_CONFIG:
     pair_name = pc["name"]
     try:
-        # run the full pipeline once per pair
         pair_obj, ratio_tmp, sig_tmp = run_pair(pc, loader, params)
         bt_tmp = Backtester(params)
         eq_tmp, trades_tmp, mt_tmp = bt_tmp.run(ratio_tmp, sig_tmp)
         k = kpis(trades_tmp, params["position_usd"], eq_tmp, mt_tmp)
 
-        # store z-series and metrics
         z_cols.append(ratio_tmp[["z"]].rename(columns={"z": pair_name}))
         pair_results[pair_name] = k
     except Exception:
@@ -266,38 +300,40 @@ for pc in PAIR_CONFIG:
 if z_cols:
     zscores = pd.concat(z_cols, axis=1).dropna(how="all")
 
-    # if no overlapping dates, avoid IndexError and show a friendly message
     if zscores.empty:
-        st.info("Not enough overlapping data across pairs to build cross-pair z-score heatmap.")
+        st.info(
+            "Not enough overlapping data across pairs to build cross-pair z-score heatmap."
+        )
     else:
-        # last timestamp for the “latest z” snapshot
         last_idx = zscores.index[-1]
         latest = zscores.tail(1).T.rename(columns={last_idx: "latest_z"})
 
-        # Multi-pair summary table
         summary_rows = []
         for pair_name, k in pair_results.items():
-            summary_rows.append({
-                "pair": pair_name,
-                "trades": k.get("trades", 0),
-                "hit_rate": k.get("hit_rate", 0.0),
-                "sharpe_like": k.get("sharpe_like", 0.0),
-                "equity_sharpe": k.get("equity_sharpe", 0.0),
-                "latest_z": float(latest.loc[pair_name, "latest_z"])
-                if pair_name in latest.index else np.nan,
-            })
+            summary_rows.append(
+                {
+                    "pair": pair_name,
+                    "trades": k.get("trades", 0),
+                    "hit_rate": k.get("hit_rate", 0.0),
+                    "sharpe_like": k.get("sharpe_like", 0.0),
+                    "equity_sharpe": k.get("equity_sharpe", 0.0),
+                    "latest_z": float(latest.loc[pair_name, "latest_z"])
+                    if pair_name in latest.index
+                    else np.nan,
+                }
+            )
 
         if summary_rows:
             summary_df = pd.DataFrame(summary_rows).set_index("pair")
             st.subheader("Multi-pair summary")
             st.dataframe(summary_df)
 
-        # Latest z snapshot table
         st.dataframe(latest)
 
-        # Heatmap
         fig4, ax4 = plt.subplots(figsize=(8, 3))
-        cax = ax4.imshow(zscores.T, aspect="auto", interpolation="nearest", cmap="RdBu_r")
+        cax = ax4.imshow(
+            zscores.T, aspect="auto", interpolation="nearest", cmap="RdBu_r"
+        )
         ax4.set_yticks(range(len(zscores.columns)))
         ax4.set_yticklabels(zscores.columns)
 
@@ -312,4 +348,4 @@ if z_cols:
         fig4.colorbar(cax, label="z")
         st.pyplot(fig4, clear_figure=True)
 else:
-    st.write("Unable to build heatmap – check that all CSVs exist in ./data.")
+    st.write("Unable to build heatmap – check that all FX and price series load.")
