@@ -26,11 +26,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 st.sidebar.subheader("Data source")
 source = st.sidebar.selectbox("Source", ["Demo CSV", "Tiingo"])
 
-if source == "Tiingo":
-    loader = TiingoLoader(csv_path=str(DATA_DIR))
-    st.sidebar.caption("Using Tiingo EOD for ETFs. FX still from ./data CSVs.")
-else:
-    loader = DemoCSVLoader(str(DATA_DIR))
+
 
 
 
@@ -45,39 +41,65 @@ DEFAULT_PARAMS = {
 # ====================== STREAMLIT DATA LOADER ======================
 
 class StreamlitLoader(DataLoader):
-    """DataLoader wrapper that prefers uploaded CSVs and falls back to ./data.
-
-    The class caches results via ``st.cache_data`` to avoid repeated parsing
-    when the user tweaks parameters.
+    """DataLoader wrapper that prefers uploaded CSVs and falls back to a base loader
+    (Tiingo or DemoCSV) and then to ./data as a last resort.
     """
 
-    def __init__(self, root: str = "./data", uploads: Dict[str, Optional[io.BytesIO]] = None):
+    def __init__(
+        self,
+        root: str = "./data",
+        uploads: Dict[str, Optional[bytes]] = None,
+        base_loader: DataLoader | None = None,
+    ):
         self.root = root
         self.uploads = uploads or {}
+        self.base_loader = base_loader
 
     @st.cache_data(show_spinner=False)
     def _read_cached(_self, key: str, raw: bytes | None, path: str | None) -> pd.DataFrame:
         if raw is not None:
             df = pd.read_csv(io.BytesIO(raw), parse_dates=[0])
-        else:
+        elif path is not None:
             df = pd.read_csv(path, parse_dates=[0])
+        else:
+            raise ValueError("No data source provided to _read_cached")
         df = df.set_index(df.columns[0]).sort_index()
         if "close" not in df.columns:
             df.columns = [c.lower() for c in df.columns]
-        # enforce a single 'close' column
         if "close" not in df.columns:
             raise ValueError("Uploaded CSV must contain a 'close' column")
         return df[["close"]]
 
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
         raw = self.uploads.get(ticker)
+        if raw is not None:
+            return self._read_cached(f"etf::{ticker}", raw, None)
+
+        # try base loader (Tiingo or DemoCSV)
+        if self.base_loader is not None:
+            try:
+                return self.base_loader.load_etf_daily(ticker)
+            except Exception:
+                pass
+
+        # fall back to local CSV
         path = os.path.join(self.root, f"{ticker}_daily.csv")
-        return self._read_cached(f"etf::{ticker}", raw, path)
+        return self._read_cached(f"etf::{ticker}", None, path)
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
         raw = self.uploads.get(pair)
+        if raw is not None:
+            return self._read_cached(f"fx::{pair}", raw, None)
+
+        if self.base_loader is not None:
+            try:
+                return self.base_loader.load_fx_daily(pair)
+            except Exception:
+                pass
+
         path = os.path.join(self.root, f"{pair}_daily.csv")
-        return self._read_cached(f"fx::{pair}", raw, path)
+        return self._read_cached(f"fx::{pair}", None, path)
+
 
 
 def build_fx_map(loader: DataLoader) -> Dict[str, pd.DataFrame]:
@@ -186,7 +208,15 @@ for fx_pair, fx_file in fx_uploads:
     if fx_file is not None:
         uploads_map[fx_pair] = fx_file.getvalue()
 
-loader = StreamlitLoader(root="./data", uploads=uploads_map)
+# choose base loader depending on sidebar selection
+if source == "Tiingo":
+    base_loader = TiingoLoader(csv_path=str(DATA_DIR))
+    st.sidebar.caption("Using Tiingo EOD for ETFs. FX still from ./data CSVs.")
+else:
+    base_loader = DemoCSVLoader(str(DATA_DIR))
+
+loader = StreamlitLoader(root=str(DATA_DIR), uploads=uploads_map, base_loader=base_loader)
+
 try:
     pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
 except KeyError as e:
