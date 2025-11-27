@@ -24,8 +24,6 @@ from arbitrage.data import DataLoader, YahooLoader
 # Single live loader for the whole app
 loader: DataLoader = YahooLoader()
 
-
-
 DEFAULT_PARAMS = {
     **PARAMS,
     "lookback": 60,
@@ -33,8 +31,6 @@ DEFAULT_PARAMS = {
     "exit_z": 0.5,
     "min_corr": 0.8,
 }
-
-
 
 # ====================== STREAMLIT UI ======================
 
@@ -65,7 +61,6 @@ with st.sidebar:
                                  float(DEFAULT_PARAMS["borrow_bps"]), 5.0)
     latency_bars = st.number_input("Latency bars", 0, 5, int(DEFAULT_PARAMS["latency_bars"]))
 
- 
 params = dict(
     lookback=lookback,
     entry_z=entry_z,
@@ -144,6 +139,26 @@ def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairDat
     sigs = sig_engine.generate(ratio_df)
     return pair, ratio_df, sigs
 
+
+# run the pipeline once for the selected pair
+try:
+    pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
+except Exception as e:
+    st.error(f"Data error while loading pair '{pair_conf['name']}': {e}")
+    st.stop()
+
+# Backtest on this pair
+bt = Backtester(params)
+equity_df, trades, market_time = bt.run(ratio_df, sigs)
+trade_df = summarize_trades(trades, params["position_usd"]) if trades else pd.DataFrame()
+metrics = kpis(trades, params["position_usd"], equity_df, market_time) if trades is not None else {"trades": 0}
+metrics.update({
+    "adf_pvalue": PairAnalyzer.adf_pvalue(np.log(ratio_df["ratio"]).dropna()),
+    "avg_roll_corr": float(ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()) if "roll_corr" in ratio_df else 0.0,
+    "corr_below_min_pct": float((ratio_df.get("roll_corr", pd.Series(dtype=float)) < min_corr).mean() * 100)
+    if "roll_corr" in ratio_df
+    else 0.0,
+})
 
 # ====================== PLOTS ======================
 
