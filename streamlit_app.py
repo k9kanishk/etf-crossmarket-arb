@@ -80,6 +80,50 @@ params = dict(
     position_usd=position_usd,
 )
 
+# ====================== DATA + SIGNAL PIPELINE ======================
+
+def build_fx_map(loader: DataLoader) -> Dict[str, pd.DataFrame]:
+    """Load FX series needed to normalize into BASE_CCY."""
+    fx_map: Dict[str, pd.DataFrame] = {}
+    for k in {"EURUSD", "USDGBP", "GBPUSD", "EURGBP"}:
+        try:
+            fx_map[k] = loader.load_fx_daily(k)
+        except Exception:
+            # optional – only complain later if conversion fails
+            pass
+    return fx_map
+
+
+def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairData, pd.DataFrame, List]:
+    """Load, FX-normalize, build ratio DF and generate signals for a pair."""
+    fx_map = build_fx_map(loader)
+    fx_norm = FXNormalizer(BASE_CCY, fx_map)
+
+    us_df = loader.load_etf_daily(pair_conf["us"]["ticker"])
+    eu_df = loader.load_etf_daily(pair_conf["eu"]["ticker"])
+
+    pair = PairData(
+        name=pair_conf["name"],
+        us_close=us_df["close"],
+        eu_close=eu_df["close"],
+        us_ccy=pair_conf["us"]["ccy"],
+        eu_ccy=pair_conf["eu"]["ccy"],
+    )
+
+    analyzer = PairAnalyzer(fx_norm, lookback=params["lookback"])
+    ratio_df = analyzer.build_ratio_df(pair)
+
+    sig_engine = SignalEngine(params)
+    sigs = sig_engine.generate(ratio_df)
+    return pair, ratio_df, sigs
+
+
+# run the pipeline once for the selected pair
+try:
+    pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
+except KeyError as e:
+    st.error(f"FX conversion missing: {e}")
+    st.stop()
 
 
 bt = Backtester(params)
