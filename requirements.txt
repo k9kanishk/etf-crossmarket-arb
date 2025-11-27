@@ -10,3 +10,4 @@ requests
 python-dotenv
 pytest
 tiingo>=0.16.0
+yfinance>=0.2.40
