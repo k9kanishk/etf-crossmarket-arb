@@ -1,22 +1,26 @@
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
+
 from arbitrage.config import PARAMS, PAIR_CONFIG
 from arbitrage.core import Explorer
-from arbitrage.data import DemoCSVLoader  # or Vendor loader later
+from arbitrage.data import DemoCSVLoader, TiingoLoader
 
-USE_VENDOR = False  # flip to True when you use real API data
 DATA_DIR = Path(__file__).resolve().parent / "data"
+USE_VENDOR = True  # turn this on when you want Tiingo data
 
 
 def main() -> None:
     if USE_VENDOR:
-        from arbitrage.data import TiingoLoader
-        loader = TiingoLoader()
-        params = deepcopy(PARAMS)  # keep strict for real data
+        # Use Tiingo for ETFs, CSVs for FX
+        loader = TiingoLoader(
+            start=None,        # or "2015-01-01"
+            end=None,          # or "2024-12-31"
+            csv_path=str(DATA_DIR),
+        )
+        params = deepcopy(PARAMS)  # keep your stricter prod-like params
     else:
         loader = DemoCSVLoader(str(DATA_DIR))
         params = deepcopy(PARAMS)
-        # relax only for mock CSVs
         params.update({
             "lookback": 20,
             "entry_z": 1.0,
