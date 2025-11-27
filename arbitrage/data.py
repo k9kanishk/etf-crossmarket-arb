@@ -1,13 +1,31 @@
-
 from __future__ import annotations
-import pandas as pd
+
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Dict, Optional
+import functools
+import logging
+import os
+
+import pandas as pd
+import yfinance as yf
+
+# Tiingo is optional – only needed if you actually use TiingoLoader
+try:
+    from tiingo import TiingoClient
+except ImportError:
+    TiingoClient = None
+
+
+# ======================================================================
+# Base interface
+# ======================================================================
 
 class DataLoader(ABC):
     """
-    Replace these with vendor-specific readers (Refinitiv, Bloomberg, Polygon, Tiingo, etc.).
-    Expected output: DataFrame indexed by date/datetime, must include column 'close'.
+    Vendor-agnostic data interface.
+
+    Implementors must return a DataFrame indexed by date/datetime
+    with a single column named 'close'.
     """
 
     @abstractmethod
@@ -19,10 +37,16 @@ class DataLoader(ABC):
         raise NotImplementedError
 
 
+# ======================================================================
+# Simple CSV loader (used by tests and as a fallback)
+# ======================================================================
+
 class DemoCSVLoader(DataLoader):
     """
     Simple CSV loader for local testing.
+
     Filenames expected like: ./data/SPY_daily.csv, ./data/EURUSD_daily.csv
+
     CSV format:
         date,close
         2024-10-01,500.12
@@ -35,10 +59,15 @@ class DemoCSVLoader(DataLoader):
     def _read(self, path: str) -> pd.DataFrame:
         df = pd.read_csv(path, parse_dates=[0])
         df = df.set_index(df.columns[0]).sort_index()
-        # Normalize expected column name
+
+        # Normalise expected column name
         if "close" not in df.columns:
             df.columns = [c.lower() for c in df.columns]
-        return df
+
+        if "close" not in df.columns:
+            raise ValueError(f"CSV {path} must contain a 'close' column (or convertible)")
+
+        return df[["close"]]
 
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
         return self._read(f"{self.root}/{ticker}_daily.csv")
@@ -46,13 +75,10 @@ class DemoCSVLoader(DataLoader):
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
         return self._read(f"{self.root}/{pair}_daily.csv")
 
-import os
-import logging
-import pandas as pd
-from tiingo import TiingoClient
 
-from .data import DataLoader, DemoCSVLoader  # adjust import if needed
-
+# ======================================================================
+# Tiingo loader (optional, currently not used in Streamlit app)
+# ======================================================================
 
 class TiingoLoader(DataLoader):
     """
@@ -64,12 +90,15 @@ class TiingoLoader(DataLoader):
 
     def __init__(
         self,
-        start: str | None = None,
-        end: str | None = None,
-        api_key: str | None = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        api_key: Optional[str] = None,
         csv_path: str = "data",
         **_: object,  # swallow any extra kwargs safely
     ) -> None:
+        if TiingoClient is None:
+            raise ImportError("tiingo package not installed – cannot use TiingoLoader")
+
         cfg: dict[str, object] = {"session": True}
         cfg["api_key"] = api_key or os.getenv("TIINGO_API_KEY")
         if not cfg["api_key"]:
@@ -100,9 +129,15 @@ class TiingoLoader(DataLoader):
                 frequency="daily",
                 **self._date_kwargs(),
             )
-            # Tiingo EOD uses adjClose for adjusted prices
+            if df.empty:
+                raise ValueError(f"Tiingo: no data for {ticker}")
+
             col = "adjClose" if "adjClose" in df.columns else "close"
-            out = pd.DataFrame({"close": df[col]})
+            series = df[col].dropna()
+            if series.empty:
+                raise ValueError(f"Tiingo: all NaNs for {ticker}")
+
+            out = pd.DataFrame({"close": series})
             out.index = pd.to_datetime(out.index).tz_localize(None)
             out = out.sort_index()
             return out
@@ -111,19 +146,16 @@ class TiingoLoader(DataLoader):
             logging.warning(
                 "TiingoLoader: failed for %s (%s). Falling back to CSV.", ticker, e
             )
-            # this will read e.g. data/CSPX.L_daily.csv which you already have
             return self.csv_loader.load_etf_daily(ticker)
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
         """Currently always load FX from local CSVs."""
         return self.csv_loader.load_fx_daily(pair)
 
-import functools
-import pandas as pd
-import yfinance as yf
 
-from .data import DataLoader  # keep this if YahooLoader is in a separate module
-
+# ======================================================================
+# Yahoo Finance loader (used by your live Streamlit app)
+# ======================================================================
 
 class YahooLoader(DataLoader):
     """
@@ -136,27 +168,35 @@ class YahooLoader(DataLoader):
     """
 
     def __init__(self, period: str = "2y") -> None:
-        # how much history to pull from Yahoo, tweak if needed
+        # how much history to pull from Yahoo – tweak if needed
         self.period = period
 
     def _download(self, symbol: str) -> pd.DataFrame:
         df = yf.download(
             symbol,
             period=self.period,
-            auto_adjust=True,   # already adjusted, so we can use 'Close'
+            auto_adjust=True,   # already adjusted, so we can safely use 'Close'
             progress=False,
         )
 
-        if df.empty:
+        if not isinstance(df, pd.DataFrame) or df.empty:
             raise ValueError(f"YahooLoader: no data returned for {symbol}")
 
         # prefer Adj Close if present, else Close
         col = "Adj Close" if "Adj Close" in df.columns else "Close"
-        series = df[col].dropna()
+        sub = df[col]
+
+        # sub is usually a Series, but be defensive in case of weird multi-index
+        if isinstance(sub, pd.DataFrame):
+            # take the first column as a fallback
+            series = sub.iloc[:, 0].dropna()
+        else:
+            series = sub.dropna()
+
         if series.empty:
             raise ValueError(f"YahooLoader: all close values NaN for {symbol}")
 
-        out = series.to_frame(name="close")
+        out = pd.DataFrame({"close": series})
         out.index = pd.to_datetime(out.index).tz_localize(None)
         out = out.sort_index()
         return out
@@ -174,4 +214,3 @@ class YahooLoader(DataLoader):
         # internal "EURUSD" -> Yahoo "EURUSD=X"
         symbol = pair + "=X"
         return self._download_cached(symbol)
-
