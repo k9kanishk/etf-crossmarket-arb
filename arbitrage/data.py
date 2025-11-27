@@ -50,12 +50,14 @@ import os
 import pandas as pd
 from tiingo import TiingoClient
 
-# ... keep your existing DemoCSVLoader above ...
+# ... keep DemoCSVLoader above as you already have it ...
 
 class TiingoLoader:
     """
     Data loader that pulls daily ETF prices from the Tiingo API.
-    FX can still come from your existing CSVs via an internal DemoCSVLoader.
+
+    - ETFs: from Tiingo (EOD)
+    - FX:  currently delegated to DemoCSVLoader using local CSVs
     """
 
     def __init__(
@@ -72,14 +74,15 @@ class TiingoLoader:
             raise ValueError(
                 "TiingoLoader: set TIINGO_API_KEY env var or pass api_key=."
             )
+
         self.client = TiingoClient(cfg)
         self.start = start
         self.end = end
 
-        # Use your existing CSV loader for FX for now
+        # Reuse your CSV loader for FX
         self.fx_csv_loader = DemoCSVLoader(csv_path)
 
-    # ---- helpers ---------------------------------------------------------
+    # ---- internal helpers -------------------------------------------------
 
     def _date_kwargs(self) -> dict[str, str]:
         kw: dict[str, str] = {}
@@ -89,12 +92,12 @@ class TiingoLoader:
             kw["endDate"] = self.end
         return kw
 
-    # ---- public API used by Explorer ------------------------------------
+    # ---- public API used by Explorer --------------------------------------
 
     def load_etf_daily(self, ticker: str) -> pd.DataFrame:
         """
-        Return a DataFrame with a DatetimeIndex and a 'close' column,
-        using adjClose if available.
+        Return a DataFrame with DatetimeIndex and 'close' column
+        (using adjClose if available).
         """
         df = self.client.get_dataframe(
             ticker,
@@ -110,11 +113,11 @@ class TiingoLoader:
 
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
         """
-        For now, just delegate FX to the CSV loader, so you keep using
-        your existing EURUSD_daily.csv etc.
-        Later you can swap this to Tiingo's FX endpoint.
+        For now FX still comes from your CSVs (e.g. EURUSD_daily.csv).
+        Later you can swap this to Tiingo's FX API.
         """
         return self.fx_csv_loader.load_fx_daily(pair)
+
 
 
 import os
