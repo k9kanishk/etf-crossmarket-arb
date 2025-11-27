@@ -189,8 +189,15 @@ class YahooLoader(DataLoader):
         return out
 
     def _download(self, symbol: str) -> pd.DataFrame:
-        df = self._raw_download(symbol)
-        return self._extract_close(df, symbol)
+        df = yf.download(symbol, period=self.period, auto_adjust=True, progress=False)
+        if df.empty:
+            raise ValueError(f"No data returned from Yahoo for {symbol}")
+
+        col = "Adj Close" if "Adj Close" in df.columns else "Close"
+        out = pd.DataFrame({"close": df[col]})
+        out.index = pd.to_datetime(out.index).tz_localize(None)
+        out = out.sort_index()
+        return out
 
     @functools.lru_cache(maxsize=64)
     def _download_cached(self, symbol: str) -> pd.DataFrame:
