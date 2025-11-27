@@ -121,8 +121,8 @@ def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairDat
 # run the pipeline once for the selected pair
 try:
     pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
-except KeyError as e:
-    st.error(f"FX conversion missing: {e}")
+except Exception as e:
+    st.error(f"Data error while loading pair '{pair_conf['name']}': {e}")
     st.stop()
 
 
