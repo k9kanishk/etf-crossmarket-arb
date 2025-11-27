@@ -181,4 +181,3 @@ class YahooLoader(DataLoader):
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
         symbol = pair + "=X"
         return self._download_cached(symbol)
-
