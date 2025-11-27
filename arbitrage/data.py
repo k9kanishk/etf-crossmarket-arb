@@ -118,20 +118,19 @@ class TiingoLoader(DataLoader):
         """Currently always load FX from local CSVs."""
         return self.csv_loader.load_fx_daily(pair)
 
+import functools
 import pandas as pd
 import yfinance as yf
-import functools
 
-from . import config  # if you need BASE_CCY; optional
-from .data import DataLoader  # adjust import to your actual file structure
+from .data import DataLoader  # adjust import if needed
 
 
 class YahooLoader(DataLoader):
     """
     Live data loader using Yahoo Finance via yfinance.
 
-    - ETFs: uses tickers as defined in PAIR_CONFIG (SPY, VWO, CSPX.L, IEMM.MI, etc.)
-    - FX:   internal code 'EURUSD' -> Yahoo symbol 'EURUSD=X', etc.
+    - ETFs: tickers taken directly from PAIR_CONFIG (SPY, CSPX.L, VWO, IEMM.MI, ...)
+    - FX:   internal 'EURUSD' -> Yahoo 'EURUSD=X', etc.
     """
 
     def __init__(self, start: str | None = None, end: str | None = None) -> None:
@@ -146,27 +145,32 @@ class YahooLoader(DataLoader):
             progress=False,
             auto_adjust=False,
         )
-        if df.empty:
-            raise ValueError(f"No data returned from Yahoo for {symbol}")
 
-        col = "Adj Close" if "Adj Close" in df.columns else "Close"
-        out = pd.DataFrame({"close": df[col]})
+        # Ensure we really have a DataFrame with rows
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            raise ValueError(f"YahooLoader: no data returned for {symbol}")
+
+        # Pick adjusted close if available, else close
+        if "Adj Close" in df.columns:
+            series = df["Adj Close"]
+        elif "Close" in df.columns:
+            series = df["Close"]
+        else:
+            raise ValueError(
+                f"YahooLoader: expected 'Adj Close' or 'Close' columns for {symbol}, "
+                f"got {list(df.columns)}"
+            )
+
+        series = series.dropna()
+        if series.empty:
+            raise ValueError(f"YahooLoader: all close values NaN for {symbol}")
+
+        # Turn Series into a proper 2D DataFrame
+        out = series.to_frame(name="close")
         out.index = pd.to_datetime(out.index).tz_localize(None)
         out = out.sort_index()
         return out
 
-    def load_etf_daily(self, ticker: str) -> pd.DataFrame:
-        # PAIR_CONFIG tickers are already Yahoo-compatible: SPY, CSPX.L, VWO, IEMM.MI, ...
-        return self._download(ticker)
-
-    def load_fx_daily(self, pair: str) -> pd.DataFrame:
-        """
-        Internal codes: 'EURUSD', 'GBPUSD', etc.
-        Yahoo FX symbols are like 'EURUSD=X', 'GBPUSD=X'.
-        """
-        symbol = pair + "=X"
-        return self._download(symbol)
-    
     @functools.lru_cache(maxsize=64)
     def _download_cached(self, symbol: str) -> pd.DataFrame:
         return self._download(symbol)
@@ -177,3 +181,4 @@ class YahooLoader(DataLoader):
     def load_fx_daily(self, pair: str) -> pd.DataFrame:
         symbol = pair + "=X"
         return self._download_cached(symbol)
+
