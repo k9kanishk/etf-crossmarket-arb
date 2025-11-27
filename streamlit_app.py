@@ -99,8 +99,19 @@ def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairDat
     fx_map = build_fx_map(loader)
     fx_norm = FXNormalizer(BASE_CCY, fx_map)
 
+    # --- load raw US & EU prices from Yahoo ---
     us_df = loader.load_etf_daily(pair_conf["us"]["ticker"])
     eu_df = loader.load_etf_daily(pair_conf["eu"]["ticker"])
+
+    # DEBUG: show basic info so we know data is there
+    st.write(
+        f"DEBUG – raw ETF lengths for {pair_conf['name']}:",
+        {"us_len": len(us_df), "eu_len": len(eu_df)},
+    )
+    if not us_df.empty:
+        st.write("DEBUG – US tail:", us_df.tail())
+    if not eu_df.empty:
+        st.write("DEBUG – EU tail:", eu_df.tail())
 
     pair = PairData(
         name=pair_conf["name"],
@@ -113,30 +124,26 @@ def run_pair(pair_conf: Dict, loader: DataLoader, params: Dict) -> tuple[PairDat
     analyzer = PairAnalyzer(fx_norm, lookback=params["lookback"])
     ratio_df = analyzer.build_ratio_df(pair)
 
+    # DEBUG: what did the analyzer return?
+    st.write(
+        f"DEBUG – ratio_df shape for {pair_conf['name']}:",
+        ratio_df.shape
+    )
+    if not ratio_df.empty:
+        cols = [c for c in ["US", "EU", "ratio", "mu", "sigma", "z"] if c in ratio_df.columns]
+        st.write("DEBUG – ratio_df tail:", ratio_df[cols].tail())
+    else:
+        # fail fast instead of silently plotting an empty chart
+        raise ValueError(
+            f"ratio_df is empty for {pair_conf['name']} – "
+            f"likely no overlapping dates after alignment/FX. "
+            f"Check tickers and FX series."
+        )
+
     sig_engine = SignalEngine(params)
     sigs = sig_engine.generate(ratio_df)
     return pair, ratio_df, sigs
 
-
-# run the pipeline once for the selected pair
-try:
-    pair, ratio_df, sigs = run_pair(pair_conf, loader, params)
-except Exception as e:
-    st.error(f"Data error while loading pair '{pair_conf['name']}': {e}")
-    st.stop()
-
-
-bt = Backtester(params)
-equity_df, trades, market_time = bt.run(ratio_df, sigs)
-trade_df = summarize_trades(trades, params["position_usd"]) if trades else pd.DataFrame()
-metrics = kpis(trades, params["position_usd"], equity_df, market_time) if trades is not None else {"trades": 0}
-metrics.update({
-    "adf_pvalue": PairAnalyzer.adf_pvalue(np.log(ratio_df["ratio"]).dropna()),
-    "avg_roll_corr": float(ratio_df.get("roll_corr", pd.Series(dtype=float)).mean()) if "roll_corr" in ratio_df else 0.0,
-    "corr_below_min_pct": float((ratio_df.get("roll_corr", pd.Series(dtype=float)) < min_corr).mean() * 100)
-    if "roll_corr" in ratio_df
-    else 0.0,
-})
 
 # ====================== PLOTS ======================
 
