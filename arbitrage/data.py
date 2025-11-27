@@ -120,6 +120,7 @@ class TiingoLoader(DataLoader):
 
 import pandas as pd
 import yfinance as yf
+import functools
 
 from . import config  # if you need BASE_CCY; optional
 from .data import DataLoader  # adjust import to your actual file structure
@@ -165,3 +166,14 @@ class YahooLoader(DataLoader):
         """
         symbol = pair + "=X"
         return self._download(symbol)
+    
+    @functools.lru_cache(maxsize=64)
+    def _download_cached(self, symbol: str) -> pd.DataFrame:
+        return self._download(symbol)
+
+    def load_etf_daily(self, ticker: str) -> pd.DataFrame:
+        return self._download_cached(ticker)
+
+    def load_fx_daily(self, pair: str) -> pd.DataFrame:
+        symbol = pair + "=X"
+        return self._download_cached(symbol)
