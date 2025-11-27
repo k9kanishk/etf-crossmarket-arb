@@ -6,12 +6,12 @@ PAIR_CONFIG = [
     {
         "name": "S&P500_US_vs_LSE",
         "us": {"ticker": "SPY",     "ccy": "USD", "venue": "NYSE"},
-        "eu": {"ticker": "CSPX.L",  "ccy": "USD", "venue": "LSE"},
+        "eu": {"ticker": "CSTNL",  "ccy": "USD", "venue": "LSE"},
     },
     {
         "name": "EM_US_vs_EU",
         "us": {"ticker": "VWO",     "ccy": "USD", "venue": "NYSE"},
-        "eu": {"ticker": "IEMM.MI", "ccy": "EUR", "venue": "BorsaItaliana"},
+        "eu": {"ticker": "IZIZF", "ccy": "EUR", "venue": "BorsaItaliana"},
     },
 ]
 
