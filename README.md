@@ -1,12 +1,8 @@
-Here is a clean, professional, and formatted `README.md` based on your description. I have added a placeholder for a screenshot and organized it for standard GitHub best practices.
-
------
-
 # Global ETF Cross-Market Arbitrage Explorer
 
 > **One-liner:** A cross-market ETF arbitrage tracker that pulls live data, normalizes U.S. and European listings into a common currency, detects \>2σ mispricings with a z-score model, and backtests mean-reversion trades with latency, cost, and borrow modeling.
 
-[Image of financial dashboard visualization]
+![Uploading image.png…]()
 
 A compact research toolkit for spotting cross-venue ETF mispricings, normalizing across FX, and backtesting mean-reversion trades.
 
