@@ -1,67 +1,171 @@
+Here is a clean, professional, and formatted `README.md` based on your description. I have added a placeholder for a screenshot and organized it for standard GitHub best practices.
+
+-----
+
 # Global ETF Cross-Market Arbitrage Explorer
 
-A compact research toolkit for spotting cross-venue ETF mispricings, normalizing across FX, and backtesting mean-reversion trades. The project ships with demo CSVs for two U.S./European ETF pairs (SPY vs. CSPX.L and VWO vs. IEMM.MI) plus EURUSD FX to align everything into USD.
+> **One-liner:** A cross-market ETF arbitrage tracker that pulls live data, normalizes U.S. and European listings into a common currency, detects \>2σ mispricings with a z-score model, and backtests mean-reversion trades with latency, cost, and borrow modeling.
 
-## Features
-- FX normalization into a base currency with support for common crosses (EURUSD/GBPUSD/EURGBP/USDGBP).
-- Rolling ratio, mean, and z-score calculation for each U.S./EU ETF pair.
-- Signal engine that flags |z| breakouts beyond configurable thresholds and backtests mean-reversion exits or max-hold stops.
-- Streamlit dashboard with ratio bands, rolling correlation, trade log, and a cross-pair heatmap of z-scores.
-- CLI backtester that can run against demo CSVs or a Tiingo-powered loader for live data.
+[Image of financial dashboard visualization]
 
-## Getting started
-1. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+A compact research toolkit for spotting cross-venue ETF mispricings, normalizing across FX, and backtesting mean-reversion trades.
 
-2. **Run the CLI backtest**
-   ```bash
-   python run.py
-   ```
-   By default this uses the demo CSVs under `./data`. Flip `USE_VENDOR = True` inside `run.py` and export `TIINGO_API_KEY` to pull fresh data.
+While the repo ships with sample CSVs for offline testing, the **Streamlit app pulls live daily data from Yahoo Finance** for the tickers defined in `arbitrage/config.py`.
 
-3. **Launch the Streamlit UI**
-   ```bash
-   streamlit run streamlit_app.py
-   ```
-   The sidebar lets you change lookback, entry/exit z thresholds, costs, and holding constraints. You can optionally upload custom CSVs (date + close columns) to override the bundled data without touching the filesystem.
+**Current Default Pairs:**
 
-## Data format
-Each CSV is expected to have two columns: a date/datetime index and a `close` column. Example:
+  * `SPY` (US) vs `CSTNL` (Europe)
+  * `VWO` (US) vs `IZIZF` (Europe)
+
+-----
+
+## 🚀 Features
+
+  * **FX-Aware Core**
+
+      * Automatic normalization into a base currency (default: USD).
+      * Supports common crosses (`EURUSD`, `GBPUSD`, `EURGBP`, `USDGBP`).
+      * *Smart Logic:* If both legs are already in the base currency, the FX step is skipped automatically.
+
+  * **Pair Spread Modelling**
+
+      * Calculates rolling ratios, moving averages, and z-scores for U.S./EU ETF pairs.
+      * Handles time-alignment across different market holidays/hours.
+
+  * **Signal Engine & Backtester**
+
+      * Flags $|z|$ breakouts beyond configurable thresholds.
+      * Backtests mean-reversion exits and max-hold stopouts.
+      * Models transaction fees, slippage, and borrow costs.
+
+  * **Interactive Dashboard (Streamlit)**
+
+      * Visualizes Ratio bands and Rolling correlation.
+      * Displays Trade logs and Cumulative PnL curves.
+      * Includes a **Cross-pair Z-score Heatmap** for scanning the whole universe.
+
+  * **CLI Backtester**
+
+      * Runs the pipeline headlessly against local CSVs or API data.
+      * Modular `DataLoader` system (swap between Local CSV, Tiingo, or Yahoo).
+
+-----
+
+## 🛠️ Installation
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/yourusername/etf-crossmarket-arb.git
+    cd etf-crossmarket-arb
+    ```
+
+2.  **Install dependencies:**
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+-----
+
+## 📊 Usage
+
+### 1\. Launch the Live Dashboard
+
+Start the Streamlit UI to visualize live data from Yahoo Finance:
+
+```bash
+streamlit run streamlit_app.py
 ```
+
+**What this does:**
+
+  * Fetches daily OHLCV data via `YahooLoader` for pairs in `PAIR_CONFIG`.
+  * Normalizes prices to `BASE_CCY` (USD).
+  * Computes signals and runs the backtest on the fly.
+  * **Controls:** Use the sidebar to adjust Lookback, Entry/Exit $|z|$, Position Size, Fees, and Latency.
+
+### 2\. Run the CLI Backtest
+
+Run the pipeline in the terminal (defaults to offline CSVs):
+
+```bash
+python run.py
+```
+
+> **Note:** To switch data sources in the CLI, open `run.py` and swap the loader to `YahooLoader` or `TiingoLoader`. (Tiingo requires `TIINGO_API_KEY` in env variables).
+
+-----
+
+## 📂 Project Structure
+
+```text
+arbitrage/
+├── core.py           # FX normalization, pair alignment, z-score logic
+├── backtest.py       # Trade simulation, PnL, equity curves, KPIs
+├── config.py         # Configuration (PAIR_CONFIG, BASE_CCY, default params)
+└── data.py           # DataLoaders (DemoCSV, Tiingo, Yahoo)
+├── data/             # Sample CSVs for offline testing
+├── run.py            # CLI entry point
+└── streamlit_app.py  # Interactive Dashboard
+```
+
+-----
+
+## ⚙️ Configuration & Data
+
+### Modifying Pairs
+
+To track different ETFs, edit `arbitrage/config.py`:
+
+```python
+PAIR_CONFIG = [
+    {
+        "name": "SP500_US_vs_LSE",
+        "us": {"ticker": "SPY", "ccy": "USD"},
+        "eu": {"ticker": "CSTNL", "ccy": "USD"} # Set ccy to EUR/GBP to trigger FX conversion
+    },
+    # ... add more pairs
+]
+```
+
+### Using Custom CSVs
+
+If using `DemoCSVLoader`, ensure files are placed in `./data/` and follow this format:
+
+  * **Filename:** `<TICKER>_daily.csv` (e.g., `EURUSD_daily.csv`, `SPY_daily.csv`)
+  * **Columns:** `date` (index) and `close`.
+
+<!-- end list -->
+
+```csv
 date,close
 2023-01-03,400.10
 2023-01-04,403.25
 ```
-Place ETF files as `<TICKER>_daily.csv` and FX files as `<PAIR>_daily.csv` under `./data/` or upload them through the Streamlit app.
 
-## Folder layout
-- `arbitrage/`: core logic for FX normalization, pair analysis, signal generation, backtesting, and plotting helpers.
-- `streamlit_app.py`: Streamlit dashboard wired to the same core modules.
-- `run.py`: small CLI entry point that exercises the pipeline.
-- `data/`: demo CSVs for the example ETF and FX series.
+-----
 
-## Assumptions
+## 📝 Assumptions & Limitations
 
-To keep the project focused and lightweight, the current implementation makes a few simplifying assumptions:
+To keep the project lightweight, the current engine assumes:
 
-- **Daily bars only** – all analysis is done on end-of-day close prices (no intraday microstructure).
-- **Perfect borrow / shorting** – both legs of each pair are treated as freely shortable with a configurable borrow cost (no locate risk).
-- **No explicit market impact model** – transaction costs are modeled as per-side bps plus an extra slippage bps, but we do not simulate order book depth or queue position.
-- **Single base currency** – all PnL is reported in `BASE_CCY` (currently `"USD"`). FX risk is modeled via closing FX rates only (no intraday FX basis).
-- **Static pair list** – the universe is defined in `PAIR_CONFIG` and loaded from CSV (or a single vendor) without dynamic universe selection.
+1.  **Daily Bars:** Analysis is based on End-of-Day (EOD) close prices. Intraday microstructure is not modeled.
+2.  **Perfect Borrow:** Both legs are treated as shortable with a configurable annualized borrow cost.
+3.  **Market Impact:** Transaction costs are modeled as fixed bps + slippage; order-book depth is not simulated.
+4.  **Single Base Currency:** All PnL is reported in `BASE_CCY` (USD). FX risk is modeled via closing rates (no intraday FX basis).
 
-## Limitations & possible extensions
+-----
 
-Some obvious next steps if you wanted to push this closer to production:
+## 🔮 Future Roadmap
 
-- **Intraday granularity** – move from daily closes to 5–15 minute bars and re-estimate spread dynamics on shorter horizons.
-- **More detailed execution model** – plug in a venue-aware simulator with realistic fee schedules, tick sizes, and order types.
-- **Risk controls** – add limits on per-pair and aggregate exposure, plus kill switches when correlations break or volatility spikes.
-- **Regime analysis** – detect periods where the spread stops behaving (e.g. correlation drops, ADF fails) and automatically turn off trading.
-- **Richer multi-venue support** – extend the pair definition to handle multiple European listings (LSE/Xetra/Borsa) and venue-specific FX feeds.
+  * **Intraday Granularity:** Move to 15-minute bars to capture shorter-term dislocations.
+  * **Execution Model:** Add venue-aware simulation with realistic fee schedules and limit order logic.
+  * **Risk Controls:** Implement kill switches for correlation breakdowns or volatility spikes.
+  * **Regime Analysis:** Automatically pause trading when ADF tests fail (non-mean-reverting regime).
 
+-----
 
-## Talking points
-If you want a one-liner for interviews: “I built a cross-market ETF arbitrage tracker that normalizes U.S. and European listings via FX, detects >2σ mispricings with a z-score model, and backtests mean-reversion trades with latency, cost, and borrow modeling.”
+## License
+
+MIT
