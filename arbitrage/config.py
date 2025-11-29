@@ -11,7 +11,7 @@ PAIR_CONFIG = [
     {
         "name": "EM_US_vs_EU",
         "us": {"ticker": "VWO",     "ccy": "USD", "venue": "NYSE"},
-        "eu": {"ticker": "IZIZF", "ccy": "EUR", "venue": "BorsaItaliana"},
+        "eu": {"ticker": "IZIZF", "ccy": "USD", "venue": "BorsaItaliana"},
     },
 ]
 
