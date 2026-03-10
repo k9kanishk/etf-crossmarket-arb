@@ -5,9 +5,12 @@ pandas_market_calendars
 matplotlib
 pytz
 scipy
-streamlit
+
 requests
 python-dotenv
 pytest
 tiingo>=0.16.0
 yfinance>=0.2.40
+# Recommended: modernize
+streamlit>=1.50,<2
+altair>=5,<7
